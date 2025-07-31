@@ -1,0 +1,26 @@
+I'm encountering an issue in my application's payment flow and need a precise debugging approach and solution.
+
+**Problem Description:**
+When a user clicks the "Make Payment" button, a confirmation modal (pop-up) appears. However, *at the exact moment the modal appears*, my backend system is already creating an "Incompleted Payment" record in the database.
+
+**Expected Behavior:**
+An "Incompleted Payment" record should *only* be created **after** the user explicitly clicks a "Confirm Payment" button *within* the modal, or after a successful transaction initiation with the payment gateway. It should *not* be created simply by displaying the modal.
+
+**Hypothesized Root Causes (for your consideration):**
+* An API call is being triggered by the "Make Payment" button click *before* the modal is fully confirmed.
+* The modal's display logic is inadvertently coupled with the payment creation logic.
+
+**Task:**
+1.  **Root Cause Analysis:** Based on the problem, explain the most likely technical reasons for this premature "Incompleted Payment" creation, considering both frontend (JavaScript event handling, modal display) and backend (API endpoint design, database interaction) perspectives.
+2.  **Solution Strategy:** Propose a clear, step-by-step strategy to correct this. This should involve:
+    * How to ensure the payment creation API call is *only* triggered by the final "Confirm Payment" action.
+    * Best practices for separating UI display from backend data modification.
+3.  **Code Guidance (Illustrative):** Provide small, illustrative code snippets (e.g., pseudocode, JavaScript, or a conceptual API call structure) to demonstrate the core change needed to prevent the premature creation. Focus on the event handling and API call placement.
+4.  **Recommendations:** Offer any additional architectural or design recommendations for robust payment flows.
+
+**Constraint:**
+* Focus on the immediate problem of preventing premature payment creation.
+* Assume standard REST API interactions and client-side modal libraries.
+* Be concise and actionable.
+
+**Format:** Use clear headings, bullet points, and code blocks for readability.

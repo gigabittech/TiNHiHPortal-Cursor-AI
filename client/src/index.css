@@ -1,0 +1,271 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Light theme variables */
+  --background: 0 0% 100%;
+  --foreground: 220 8.9% 16.1%;
+  --muted: 220 14.3% 95.9%;
+  --muted-foreground: 220 8.9% 46.1%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 220 8.9% 16.1%;
+  --card: 0 0% 100%;
+  --card-foreground: 220 8.9% 16.1%;
+  --border: 220 13% 91%;
+  --input: 220 13% 91%;
+  --primary: 51 100% 50%;
+  --primary-foreground: 220 8.9% 16.1%;
+  --secondary: 220 14.3% 95.9%;
+  --secondary-foreground: 220 8.9% 16.1%;
+  --accent: 220 14.3% 95.9%;
+  --accent-foreground: 220 8.9% 16.1%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+  --ring: 51 100% 50%;
+  --radius: 0.5rem;
+  
+  /* Sidebar specific colors */
+  --sidebar-background: 0 0% 98%;
+  --sidebar-foreground: 220 8.9% 16.1%;
+  --sidebar-border: 220 13% 91%;
+  --sidebar-muted: 220 14.3% 95.9%;
+  --sidebar-accent: 51 100% 50%;
+  --sidebar-accent-foreground: 220 8.9% 16.1%;
+}
+
+.dark {
+  /* Dark theme variables */
+  --background: 220 10% 3.9%;
+  --foreground: 210 40% 98%;
+  --muted: 220 5% 15.9%;
+  --muted-foreground: 220 5% 64.9%;
+  --popover: 220 10% 3.9%;
+  --popover-foreground: 210 40% 98%;
+  --card: 220 10% 3.9%;
+  --card-foreground: 210 40% 98%;
+  --border: 220 5% 15.9%;
+  --input: 220 5% 15.9%;
+  --primary: 51 100% 50%;
+  --primary-foreground: 220 8.9% 16.1%;
+  --secondary: 220 5% 15.9%;
+  --secondary-foreground: 210 40% 98%;
+  --accent: 220 5% 15.9%;
+  --accent-foreground: 210 40% 98%;
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 210 40% 98%;
+  --ring: 51 100% 50%;
+  
+  /* Sidebar specific colors for dark theme */
+  --sidebar-background: 220 13% 9%;
+  --sidebar-foreground: 210 40% 98%;
+  --sidebar-border: 220 5% 15.9%;
+  --sidebar-muted: 220 5% 15.9%;
+  --sidebar-accent: 51 100% 50%;
+  --sidebar-accent-foreground: 220 8.9% 16.1%;
+}
+
+/* High contrast theme */
+.high-contrast {
+  --background: hsl(0, 0%, 100%);
+  --foreground: hsl(0, 0%, 0%);
+  --border: hsl(0, 0%, 0%);
+  --primary: hsl(220, 100%, 30%);
+  --muted: hsl(0, 0%, 95%);
+  --muted-foreground: hsl(0, 0%, 20%);
+}
+
+.dark.high-contrast {
+  --background: hsl(0, 0%, 0%);
+  --foreground: hsl(0, 0%, 100%);
+  --border: hsl(0, 0%, 100%);
+  --primary: hsl(51, 100%, 60%);
+  --muted: hsl(0, 0%, 10%);
+  --muted-foreground: hsl(0, 0%, 80%);
+}
+
+/* Font size variants */
+.font-small {
+  font-size: 14px;
+}
+
+.font-medium {
+  font-size: 16px;
+}
+
+.font-large {
+  font-size: 18px;
+}
+
+/* Compact mode */
+.compact-mode {
+  --spacing-xs: 0.25rem;
+  --spacing-sm: 0.5rem;
+  --spacing-md: 0.75rem;
+  --spacing-lg: 1rem;
+  --spacing-xl: 1.25rem;
+}
+
+.compact-mode [class*="p-4"] {
+  padding: 0.75rem;
+}
+
+.compact-mode [class*="p-6"] {
+  padding: 1rem;
+}
+
+.compact-mode [class*="space-y-4"] > * + * {
+  margin-top: 0.75rem;
+}
+
+.compact-mode [class*="space-y-6"] > * + * {
+  margin-top: 1rem;
+}
+
+/* Reduced motion */
+.reduce-motion,
+.reduce-motion *,
+.reduce-motion *::before,
+.reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* Screen reader optimizations */
+.screen-reader-optimized {
+  /* Enhanced focus indicators */
+}
+
+.screen-reader-optimized *:focus {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.screen-reader-optimized .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    border-color: hsl(var(--border));
+  }
+
+  html {
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  body {
+    @apply font-sans antialiased;
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  .reduce-motion,
+  .reduce-motion * {
+    transition: none !important;
+    animation-duration: 0.01ms !important;
+  }
+
+  /* Font size scaling */
+  .font-small {
+    font-size: 14px;
+  }
+
+  .font-medium {
+    font-size: 16px;
+  }
+
+  .font-large {
+    font-size: 18px;
+  }
+
+  /* Compact mode */
+  .compact-mode {
+    --spacing-scale: 0.75;
+  }
+
+  .compact-mode .p-4 {
+    padding: calc(1rem * var(--spacing-scale));
+  }
+
+  .compact-mode .p-6 {
+    padding: calc(1.5rem * var(--spacing-scale));
+  }
+
+  /* High contrast mode */
+  .high-contrast {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 0%;
+    --muted: 0 0% 95%;
+    --muted-foreground: 0 0% 20%;
+    --border: 0 0% 0%;
+  }
+
+  .high-contrast.dark {
+    --background: 0 0% 0%;
+    --foreground: 0 0% 100%;
+    --muted: 0 0% 10%;
+    --muted-foreground: 0 0% 80%;
+    --border: 0 0% 100%;
+  }
+
+  /* Screen reader optimizations */
+  .screen-reader-optimized {
+    font-family: Arial, sans-serif;
+    line-height: 1.6;
+  }
+
+  .screen-reader-optimized * {
+    outline: 2px solid transparent;
+  }
+
+  .screen-reader-optimized *:focus {
+    outline: 2px solid hsl(var(--primary));
+    outline-offset: 2px;
+  }
+
+  /* Ensure all components use proper theme colors */
+  .bg-background {
+    background-color: hsl(var(--background)) !important;
+  }
+
+  .text-foreground {
+    color: hsl(var(--foreground)) !important;
+  }
+
+  .bg-card {
+    background-color: hsl(var(--card)) !important;
+  }
+
+  .text-card-foreground {
+    color: hsl(var(--card-foreground)) !important;
+  }
+
+  .bg-muted {
+    background-color: hsl(var(--muted)) !important;
+  }
+
+  .text-muted-foreground {
+    color: hsl(var(--muted-foreground)) !important;
+  }
+
+  .bg-primary {
+    background-color: hsl(var(--primary)) !important;
+  }
+
+  .text-primary-foreground {
+    color: hsl(var(--primary-foreground)) !important;
+  }
+}
