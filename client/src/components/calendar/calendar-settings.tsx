@@ -13,7 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
+import { api } from "@/lib/api";
 
 const calendarSettingsSchema = z.object({
   timeInterval: z.number().min(15).max(120),
@@ -25,6 +25,11 @@ const calendarSettingsSchema = z.object({
 });
 
 type CalendarSettingsData = z.infer<typeof calendarSettingsSchema>;
+
+// API data type for sending to server (workingDays as strings)
+type CalendarSettingsAPIData = Omit<CalendarSettingsData, 'workingDays'> & {
+  workingDays: string[];
+};
 
 interface CalendarSettingsProps {
   onClose?: () => void;
@@ -52,16 +57,14 @@ export function CalendarSettings({ onClose }: CalendarSettingsProps) {
   const queryClient = useQueryClient();
 
   const { data: settings, isLoading } = useQuery({
-    queryKey: ["/api/calendar-settings"],
+    queryKey: ["/api/calendar-settings", "practitioner-specific"],
     queryFn: async () => {
-      const response = await fetch("/api/calendar-settings", {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem("token")}`,
-        },
-      });
-      if (!response.ok) throw new Error("Failed to fetch calendar settings");
-      return response.json();
+      const response = await api.get("/api/calendar-settings");
+      console.log("Fetched calendar settings:", response);
+      return response;
     },
+    staleTime: 30000, // Cache for 30 seconds
+    gcTime: 300000, // Keep in cache for 5 minutes
   });
 
   const form = useForm<CalendarSettingsData>({
@@ -79,33 +82,43 @@ export function CalendarSettings({ onClose }: CalendarSettingsProps) {
   // Update form when settings load
   React.useEffect(() => {
     if (settings) {
+      // Convert working days from strings to numbers for form compatibility
+      const workingDaysNumbers = settings.workingDays?.map(day => {
+        const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+        return dayNames.indexOf(day.toLowerCase());
+      }).filter(day => day !== -1) || [1, 2, 3, 4, 5];
+
       form.reset({
         timeInterval: settings.timeInterval || 60,
         bufferTime: settings.bufferTime || 0,
         defaultStartTime: settings.defaultStartTime || "09:00",
         defaultEndTime: settings.defaultEndTime || "17:00",
-        workingDays: settings.workingDays || [1, 2, 3, 4, 5],
+        workingDays: workingDaysNumbers,
         isGlobal: settings.isGlobal || false,
       });
     }
   }, [settings, form]);
 
   const saveSettingsMutation = useMutation({
-    mutationFn: async (data: CalendarSettingsData) => {
-      const method = settings?.id ? "PUT" : "POST";
-      const url = settings?.id 
-        ? `/api/calendar-settings/${settings.id}` 
-        : "/api/calendar-settings";
+    mutationFn: async (data: CalendarSettingsAPIData) => {
+      console.log("Saving calendar settings:", data);
+      console.log("Current settings ID:", settings?.id);
       
-      return await apiRequest(method, url, data);
+      if (settings?.id) {
+        console.log("Updating existing settings with ID:", settings.id);
+        return await api.put(`/api/calendar-settings/${settings.id}`, data);
+      } else {
+        console.log("Creating new settings");
+        return await api.post("/api/calendar-settings", data);
+      }
     },
     onSuccess: () => {
       // CRITICAL: Force immediate calendar refresh
-      queryClient.invalidateQueries({ queryKey: ["/api/calendar-settings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar-settings", "practitioner-specific"] });
       queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
       
       // Force refetch to ensure data is fresh
-      queryClient.refetchQueries({ queryKey: ["/api/calendar-settings"] });
+      queryClient.refetchQueries({ queryKey: ["/api/calendar-settings", "practitioner-specific"] });
       
       toast({
         title: "Success",
@@ -118,6 +131,7 @@ export function CalendarSettings({ onClose }: CalendarSettingsProps) {
       }, 200);
     },
     onError: (error: any) => {
+      console.error("Save settings error:", error);
       toast({
         title: "Error",
         description: error.message || "Failed to save calendar settings",
@@ -127,12 +141,16 @@ export function CalendarSettings({ onClose }: CalendarSettingsProps) {
   });
 
   const handleSubmit = (data: CalendarSettingsData) => {
+    console.log("Form submitted with data:", data);
+    
     // Validate that end time is after start time
     const [startHour, startMin] = data.defaultStartTime.split(':').map(Number);
     const [endHour, endMin] = data.defaultEndTime.split(':').map(Number);
     
     const startMinutes = startHour * 60 + startMin;
     const endMinutes = endHour * 60 + endMin;
+    
+    console.log("Time validation:", { startMinutes, endMinutes, isValid: endMinutes > startMinutes });
     
     if (endMinutes <= startMinutes) {
       toast({
@@ -143,7 +161,18 @@ export function CalendarSettings({ onClose }: CalendarSettingsProps) {
       return;
     }
 
-    saveSettingsMutation.mutate(data);
+    // Convert working days from numbers to strings for database compatibility
+    const processedData: CalendarSettingsAPIData = {
+      ...data,
+      workingDays: data.workingDays.map(day => {
+        const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+        return dayNames[day];
+      })
+    };
+
+    console.log("Processed data for API:", processedData);
+    console.log("Calling saveSettingsMutation.mutate");
+    saveSettingsMutation.mutate(processedData);
   };
 
   const generateTimeSlots = (startTime: string, endTime: string, interval: number) => {
@@ -188,23 +217,40 @@ export function CalendarSettings({ onClose }: CalendarSettingsProps) {
   );
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center space-x-2">
-        <Settings className="h-5 w-5" />
-        <h2 className="text-lg font-semibold">Calendar Settings</h2>
+    <div className="max-w-2xl mx-auto p-6 space-y-8">
+      {/* Header */}
+      <div className="border-b pb-4">
+        <div className="flex items-center space-x-3">
+          <div className="p-2 bg-primary/10 rounded-lg">
+            <Settings className="h-6 w-6 text-primary" />
+          </div>
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Calendar Settings</h2>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+              Configure your working hours, time slots, and availability preferences
+            </p>
+          </div>
+        </div>
       </div>
 
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
+        <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-8">
           {/* Time Interval Settings */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center space-x-2">
-                <Clock className="h-4 w-4" />
-                <span>Time Interval</span>
+          <Card className="border-0 shadow-sm bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/20 dark:to-indigo-950/20">
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center space-x-3 text-lg">
+                <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
+                  <Clock className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                </div>
+                <div>
+                  <span className="font-semibold">Time Interval</span>
+                  <p className="text-sm font-normal text-gray-600 dark:text-gray-400 mt-1">
+                    Configure appointment duration and buffer times
+                  </p>
+                </div>
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-6">
               <FormField
                 control={form.control}
                 name="timeInterval"
@@ -263,14 +309,21 @@ export function CalendarSettings({ onClose }: CalendarSettingsProps) {
           </Card>
 
           {/* Working Hours */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center space-x-2">
-                <CalendarDays className="h-4 w-4" />
-                <span>Working Hours</span>
+          <Card className="border-0 shadow-sm bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-950/20 dark:to-emerald-950/20">
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center space-x-3 text-lg">
+                <div className="p-2 bg-green-100 dark:bg-green-900/30 rounded-lg">
+                  <CalendarDays className="h-5 w-5 text-green-600 dark:text-green-400" />
+                </div>
+                <div>
+                  <span className="font-semibold">Working Hours</span>
+                  <p className="text-sm font-normal text-gray-600 dark:text-gray-400 mt-1">
+                    Set your daily schedule and working days
+                  </p>
+                </div>
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-6">
               <div className="grid grid-cols-2 gap-4">
                 <FormField
                   control={form.control}
@@ -301,30 +354,32 @@ export function CalendarSettings({ onClose }: CalendarSettingsProps) {
                 />
               </div>
 
-              <div>
-                <Label className="text-sm font-medium">Working Days</Label>
-                <div className="grid grid-cols-3 gap-2 mt-2">
+              <div className="space-y-3">
+                <Label className="text-sm font-semibold text-gray-700 dark:text-gray-300">Working Days</Label>
+                <div className="grid grid-cols-2 gap-3">
                   {DAYS_OF_WEEK.map((day) => (
                     <FormField
                       key={day.value}
                       control={form.control}
                       name="workingDays"
                       render={({ field }) => (
-                        <FormItem className="flex items-center space-x-2">
+                        <FormItem>
                           <FormControl>
-                            <Switch
-                              checked={field.value?.includes(day.value)}
-                              onCheckedChange={(checked) => {
-                                const current = field.value || [];
-                                if (checked) {
-                                  field.onChange([...current, day.value]);
-                                } else {
-                                  field.onChange(current.filter(d => d !== day.value));
-                                }
-                              }}
-                            />
+                            <div className="flex items-center space-x-3 p-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
+                              <Switch
+                                checked={field.value?.includes(day.value)}
+                                onCheckedChange={(checked) => {
+                                  const current = field.value || [];
+                                  if (checked) {
+                                    field.onChange([...current, day.value]);
+                                  } else {
+                                    field.onChange(current.filter(d => d !== day.value));
+                                  }
+                                }}
+                              />
+                              <Label className="text-sm font-medium cursor-pointer">{day.label}</Label>
+                            </div>
                           </FormControl>
-                          <Label className="text-sm">{day.label}</Label>
                         </FormItem>
                       )}
                     />
@@ -335,27 +390,37 @@ export function CalendarSettings({ onClose }: CalendarSettingsProps) {
           </Card>
 
           {/* Preview */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center space-x-2">
-                <AlertCircle className="h-4 w-4" />
-                <span>Time Slots Preview</span>
+          <Card className="border-0 shadow-sm bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/20 dark:to-orange-950/20">
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center space-x-3 text-lg">
+                <div className="p-2 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
+                  <AlertCircle className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div>
+                  <span className="font-semibold">Time Slots Preview</span>
+                  <p className="text-sm font-normal text-gray-600 dark:text-gray-400 mt-1">
+                    Preview of available time slots based on your settings
+                  </p>
+                </div>
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="bg-slate-50 p-4 rounded-lg">
-                <p className="text-sm text-slate-600 mb-2">
-                  Based on your settings, these time slots will be available:
-                </p>
-                <div className="grid grid-cols-4 gap-2 max-h-32 overflow-y-auto">
-                  {previewSlots.slice(0, 20).map((slot, index) => (
-                    <span key={index} className="text-xs bg-white px-2 py-1 rounded border">
+              <div className="bg-white dark:bg-gray-800 p-6 rounded-xl border border-gray-200 dark:border-gray-700">
+                <div className="flex items-center space-x-2 mb-4">
+                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                  <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Available time slots ({previewSlots.length} total):
+                  </p>
+                </div>
+                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2 max-h-40 overflow-y-auto">
+                  {previewSlots.slice(0, 24).map((slot, index) => (
+                    <span key={index} className="text-xs bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 px-3 py-2 rounded-lg font-medium text-center">
                       {slot}
                     </span>
                   ))}
-                  {previewSlots.length > 20 && (
-                    <span className="text-xs text-slate-500 px-2 py-1">
-                      +{previewSlots.length - 20} more
+                  {previewSlots.length > 24 && (
+                    <span className="text-xs text-gray-500 dark:text-gray-400 px-3 py-2 text-center">
+                      +{previewSlots.length - 24} more
                     </span>
                   )}
                 </div>
@@ -363,16 +428,29 @@ export function CalendarSettings({ onClose }: CalendarSettingsProps) {
             </CardContent>
           </Card>
 
-          <div className="flex justify-end space-x-3">
-            <Button type="button" variant="outline" onClick={onClose}>
+          {/* Action Buttons */}
+          <div className="flex justify-end space-x-4 pt-6 border-t">
+            <Button 
+              type="button" 
+              variant="outline" 
+              onClick={onClose}
+              className="px-6 py-2"
+            >
               Cancel
             </Button>
             <Button 
               type="submit" 
               disabled={saveSettingsMutation.isPending}
-              className="bg-primary hover:bg-primary/90"
+              className="px-6 py-2 bg-gradient-to-r from-primary to-primary/90 hover:from-primary/90 hover:to-primary shadow-lg"
             >
-              {saveSettingsMutation.isPending ? "Saving..." : "Save Settings"}
+              {saveSettingsMutation.isPending ? (
+                <div className="flex items-center space-x-2">
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  <span>Saving...</span>
+                </div>
+              ) : (
+                "Save Settings"
+              )}
             </Button>
           </div>
         </form>

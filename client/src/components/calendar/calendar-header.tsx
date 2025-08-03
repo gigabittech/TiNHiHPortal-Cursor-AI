@@ -7,6 +7,7 @@ import {
 } from "@/components/ui/themed-dropdown";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { CalendarSettings } from "@/components/calendar/calendar-settings";
+import { BookingLink } from "@/components/calendar/booking-link";
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -140,9 +141,7 @@ export function CalendarHeader({
           {/* Day view: icons only */}
           {view === "day" ? (
             <>
-              <Button variant="outline" size="sm" className="cursor-pointer">
-                <CalendarIcon className="h-4 w-4" />
-              </Button>
+              <BookingLink />
 
               <Sheet>
                 <SheetTrigger asChild>
@@ -188,10 +187,7 @@ export function CalendarHeader({
           ) : (
             /* Other views: show text labels */
             <>
-              <Button variant="outline" size="sm" className="cursor-pointer">
-                <CalendarIcon className="h-4 w-4 mr-2" />
-                Booking
-              </Button>
+              <BookingLink />
 
               <Sheet>
                 <SheetTrigger asChild>

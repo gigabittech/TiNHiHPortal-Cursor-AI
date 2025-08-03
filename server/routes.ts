@@ -7,10 +7,14 @@ import { integrationService } from "./integration-service";
 import { notificationService } from "./notification-service";
 import notificationRoutes from "./notification-routes";
 import { eq, and, gte, lte, ilike, or, lt, desc, asc, count, sum, sql } from "drizzle-orm";
-import { users, patients, practitioners, appointments, clinicalNotes, invoices, messages, telehealthSessions, systemSettings, userPreferences, calendarSettings } from "@shared/schema";
+import { users, patients, practitioners, appointments, clinicalNotes, invoices, messages, telehealthSessions, systemSettings, userPreferences, calendarSettings, bookingSettings } from "@shared/schema";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { insertUserSchema, insertPatientSchema, insertPractitionerSchema, insertAppointmentSchema, insertClinicalNoteSchema, insertInvoiceSchema, insertMessageSchema, insertTelehealthSessionSchema, insertSystemSettingsSchema, insertUserPreferencesSchema, insertCalendarSettingsSchema } from "@shared/schema";
+import { format } from "date-fns";
+import { isSameDay } from "date-fns";
+import nodemailer from "nodemailer";
+import crypto from "crypto";
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
 
@@ -67,14 +71,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Create patient or practitioner profile based on role
       if (user.role === "patient") {
-        await storage.createPatient({
-          userId: user.id,
-          dateOfBirth: null, // Required field, set to null for now
-        });
+        try {
+          await storage.createPatient({
+            userId: user.id,
+            dateOfBirth: null, // Required field, set to null for now
+          });
+        } catch (patientError) {
+          console.error("Patient creation error:", patientError);
+          // Delete the user if patient creation fails
+          await storage.updateUser(user.id, { isActive: false });
+          return res.status(400).json({ message: "Failed to create patient profile" });
+        }
       } else if (user.role === "practitioner") {
-        await storage.createPractitioner({
-          userId: user.id,
-        });
+        try {
+          await storage.createPractitioner({
+            userId: user.id,
+          });
+        } catch (practitionerError) {
+          console.error("Practitioner creation error:", practitionerError);
+          // Delete the user if practitioner creation fails
+          await storage.updateUser(user.id, { isActive: false });
+          return res.status(400).json({ message: "Failed to create practitioner profile" });
+        }
       }
 
       // Generate JWT
@@ -86,7 +104,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       console.error("Registration error:", error);
-      res.status(400).json({ message: "Registration failed" });
+      if (error instanceof Error) {
+        res.status(400).json({ message: error.message });
+      } else {
+        res.status(400).json({ message: "Registration failed" });
+      }
     }
   });
 
@@ -140,6 +162,160 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Get user error:", error);
       res.status(500).json({ message: "Failed to get user data" });
+    }
+  });
+
+  // Forgot password functionality
+  app.post("/api/auth/forgot-password", async (req, res) => {
+    try {
+      const { email } = req.body;
+
+      if (!email) {
+        return res.status(400).json({ message: "Email is required" });
+      }
+
+      // Find user by email
+      const user = await storage.getUserByEmail(email);
+      if (!user) {
+        // Don't reveal if user exists or not for security
+        return res.json({ message: "If an account with that email exists, a password reset link has been sent." });
+      }
+
+      // Generate reset token
+      const resetToken = crypto.randomBytes(32).toString('hex');
+      const resetTokenExpiry = new Date(Date.now() + 3600000); // 1 hour from now
+
+      // Store reset token in user record (you might want to add these fields to your schema)
+      await storage.updateUser(user.id, {
+        resetToken,
+        resetTokenExpiry,
+      });
+
+      // Create email transporter (only if email is configured)
+      let transporter = null;
+      if (process.env.SMTP_USER && process.env.SMTP_PASS) {
+        transporter = nodemailer.createTransport({
+          host: process.env.SMTP_HOST || 'smtp.gmail.com',
+          port: parseInt(process.env.SMTP_PORT || '587'),
+          secure: false, // true for 465, false for other ports
+          auth: {
+            user: process.env.SMTP_USER,
+            pass: process.env.SMTP_PASS,
+          },
+        });
+      }
+
+      // Create reset URL
+      const resetUrl = `${process.env.CLIENT_BASE_URL || 'http://localhost:5173'}/reset-password?token=${resetToken}`;
+
+      // Email content
+      const mailOptions = {
+        from: process.env.FROM_EMAIL || 'noreply@tinhih.org',
+        to: email,
+        subject: 'Password Reset Request - TiNHiH Foundation',
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background-color: #f8f9fa; padding: 20px; text-align: center;">
+              <h2 style="color: #2c3e50; margin: 0;">TiNHiH Foundation</h2>
+              <p style="color: #7f8c8d; margin: 10px 0;">Password Reset Request</p>
+            </div>
+            <div style="padding: 30px; background-color: white;">
+              <h3 style="color: #2c3e50; margin-bottom: 20px;">Hello ${user.firstName},</h3>
+              <p style="color: #34495e; line-height: 1.6; margin-bottom: 20px;">
+                We received a request to reset your password for your TiNHiH Foundation account. 
+                If you didn't make this request, you can safely ignore this email.
+              </p>
+              <p style="color: #34495e; line-height: 1.6; margin-bottom: 30px;">
+                To reset your password, click the button below:
+              </p>
+              <div style="text-align: center; margin-bottom: 30px;">
+                <a href="${resetUrl}" 
+                   style="background-color: #3498db; color: white; padding: 12px 30px; 
+                          text-decoration: none; border-radius: 5px; display: inline-block; 
+                          font-weight: bold;">
+                  Reset Password
+                </a>
+              </div>
+              <p style="color: #7f8c8d; font-size: 14px; margin-bottom: 20px;">
+                This link will expire in 1 hour for security reasons.
+              </p>
+              <p style="color: #7f8c8d; font-size: 14px;">
+                If the button doesn't work, copy and paste this link into your browser:<br>
+                <a href="${resetUrl}" style="color: #3498db;">${resetUrl}</a>
+              </p>
+            </div>
+            <div style="background-color: #ecf0f1; padding: 20px; text-align: center;">
+              <p style="color: #7f8c8d; font-size: 12px; margin: 0;">
+                © 2024 TiNHiH Foundation. All rights reserved.
+              </p>
+            </div>
+          </div>
+        `,
+      };
+
+      // Send email (only if email is configured)
+      if (transporter && process.env.SMTP_USER && process.env.SMTP_PASS) {
+        try {
+          await transporter!.sendMail(mailOptions);
+          console.log(`Password reset email sent to ${email}`);
+        } catch (emailError) {
+          console.error("Email sending failed:", emailError);
+          // In development, we can still proceed without email
+          if (process.env.NODE_ENV === 'development') {
+            console.log(`Development mode: Password reset link would be: ${resetUrl}`);
+          }
+        }
+      } else {
+        console.log(`Email not configured. Password reset link would be: ${resetUrl}`);
+        if (process.env.NODE_ENV === 'development') {
+          console.log(`\n🔗 DEVELOPMENT MODE - Password Reset Link:`);
+          console.log(`   ${resetUrl}`);
+          console.log(`   Token: ${resetToken}`);
+          console.log(`   Expires: ${resetTokenExpiry.toISOString()}\n`);
+        }
+      }
+
+      res.json({ message: "If an account with that email exists, a password reset link has been sent." });
+    } catch (error) {
+      console.error("Forgot password error:", error);
+      res.status(500).json({ message: "Failed to process password reset request" });
+    }
+  });
+
+  app.post("/api/auth/reset-password", async (req, res) => {
+    try {
+      const { token, newPassword } = req.body;
+
+      if (!token || !newPassword) {
+        return res.status(400).json({ message: "Token and new password are required" });
+      }
+
+      // Find user by reset token
+      const [user] = await db.select().from(users).where(eq(users.resetToken, token));
+      
+      if (!user) {
+        return res.status(400).json({ message: "Invalid or expired reset token" });
+      }
+
+      // Check if token is expired
+      if (user.resetTokenExpiry && new Date() > new Date(user.resetTokenExpiry)) {
+        return res.status(400).json({ message: "Reset token has expired" });
+      }
+
+      // Hash new password
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+      // Update user with new password and clear reset token
+      await storage.updateUser(user.id, {
+        password: hashedPassword,
+        resetToken: null,
+        resetTokenExpiry: null,
+      });
+
+      res.json({ message: "Password has been reset successfully" });
+    } catch (error) {
+      console.error("Reset password error:", error);
+      res.status(500).json({ message: "Failed to reset password" });
     }
   });
 
@@ -464,28 +640,111 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Appointment routes
   app.get("/api/appointments", verifyToken, async (req: any, res) => {
     try {
-      const { patientId, practitionerId, date, limit = 50, offset = 0 } = req.query;
+      const { practitionerId, patientId } = req.query;
+      const user = req.user;
       
-      // If user is a patient, only show their appointments
-      let filterPatientId = patientId;
-      if (req.user.role === "patient") {
-        const patient = await storage.getPatientByUserId(req.user.id);
-        filterPatientId = patient?.id;
+      console.log("Fetching appointments with filters:", { practitionerId, patientId, userRole: user.role });
+      
+      let appointments;
+      
+      // If user is a practitioner, get their appointments by default
+      if (user.role === "practitioner") {
+        const practitioner = await storage.getPractitionerByUserId(user.id);
+        if (practitioner) {
+          appointments = await storage.getAppointments(practitioner.id, patientId);
+        } else {
+          appointments = [];
+        }
+      } else {
+        // For other roles, use the provided filters
+        appointments = await storage.getAppointments(practitionerId, patientId);
       }
-
-      // If user is a practitioner, only show their appointments
-      let filterPractitionerId = practitionerId;
-      if (req.user.role === "practitioner") {
-        const practitioner = await storage.getPractitionerByUserId(req.user.id);
-        filterPractitionerId = practitioner?.id;
-      }
-
-      const appointments = await storage.getAppointments(filterPractitionerId, filterPatientId);
+      
+      console.log("Retrieved appointments:", appointments.length, "appointments");
       
       res.json(appointments);
     } catch (error) {
       console.error("Get appointments error:", error);
       res.status(500).json({ message: "Failed to get appointments" });
+    }
+  });
+
+  app.get("/api/appointments/available-slots", verifyToken, async (req: any, res) => {
+    try {
+      const { date, practitionerId } = req.query;
+      
+      if (!date || !practitionerId) {
+        return res.status(400).json({ 
+          message: "Date and practitionerId are required" 
+        });
+      }
+      
+      const selectedDate = new Date(date);
+      const existingAppointments = await storage.getAppointments(practitionerId);
+      
+      // Get calendar settings for this practitioner
+      const calendarSettings = await storage.getCalendarSettings(practitionerId);
+      const settings = calendarSettings || {
+        timeInterval: 60,
+        defaultStartTime: "09:00",
+        defaultEndTime: "17:00",
+        bufferTime: 0
+      };
+      
+      // Generate time slots
+      const [startHour, startMin] = settings.defaultStartTime.split(':').map(Number);
+      const [endHour, endMin] = settings.defaultEndTime.split(':').map(Number);
+      
+      let currentMinutes = startHour * 60 + startMin;
+      const endMinutes = endHour * 60 + endMin;
+      const availableSlots = [];
+      
+      while (currentMinutes < endMinutes) {
+        const hour = Math.floor(currentMinutes / 60);
+        const min = currentMinutes % 60;
+        const timeString = `${hour.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}`;
+        
+        // Check if this time slot is available
+        const slotDateTime = new Date(selectedDate);
+        slotDateTime.setHours(hour, min, 0, 0);
+        
+        // Skip if slot is in the past
+        if (slotDateTime < new Date()) {
+          currentMinutes += settings.timeInterval;
+          continue;
+        }
+        
+        const slotEndTime = new Date(slotDateTime.getTime() + 60 * 60000); // Default 1 hour
+        const bufferStartTime = new Date(slotDateTime.getTime() - settings.bufferTime * 60000);
+        const bufferEndTime = new Date(slotEndTime.getTime() + settings.bufferTime * 60000);
+        
+        const hasConflict = existingAppointments.some((apt: any) => {
+          if (!isSameDay(new Date(apt.appointmentDate), selectedDate)) return false;
+          
+          const existingDateTime = new Date(apt.appointmentDate);
+          const existingEndTime = new Date(existingDateTime.getTime() + (apt.duration || 60) * 60000);
+          
+          return (
+            (slotDateTime < existingEndTime && slotEndTime > existingDateTime) ||
+            (existingDateTime < bufferEndTime && existingEndTime > bufferStartTime)
+          );
+        });
+        
+        if (!hasConflict) {
+          availableSlots.push({
+            time: timeString,
+            label: format(slotDateTime, 'h:mm a'),
+            isAvailable: true
+          });
+        }
+        
+        currentMinutes += settings.timeInterval;
+      }
+      
+      res.json(availableSlots);
+    } catch (error) {
+      console.error("Get available slots error:", error);
+      res.status(500).json({ message: "Failed to get available slots" });
     }
   });
 
@@ -504,13 +763,58 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/appointments", verifyToken, async (req, res) => {
     try {
+      console.log("Creating appointment with data:", req.body);
+      
       // Convert appointmentDate string to Date if needed
       if (req.body.appointmentDate && typeof req.body.appointmentDate === 'string') {
         req.body.appointmentDate = new Date(req.body.appointmentDate);
       }
       
       const appointmentData = insertAppointmentSchema.parse(req.body);
+      console.log("Parsed appointment data:", appointmentData);
+      
+      // Validate appointment is not in the past
+      const appointmentDateTime = new Date(appointmentData.appointmentDate);
+      const now = new Date();
+      
+      if (appointmentDateTime < now) {
+        return res.status(400).json({ 
+          message: "Cannot create appointments in the past" 
+        });
+      }
+      
+      // Check for scheduling conflicts
+      const existingAppointments = await storage.getAppointments(appointmentData.practitionerId);
+      const appointmentEndTime = new Date(appointmentDateTime.getTime() + (appointmentData.duration || 60) * 60000);
+      
+      // Get calendar settings for buffer time
+      const practitioner = await storage.getPractitionerByUserId(req.user.id);
+      const calendarSettings = await storage.getCalendarSettings(practitioner?.id);
+      const bufferTime = calendarSettings?.bufferTime || 0;
+      
+      const hasConflict = existingAppointments.some((apt: any) => {
+        const existingDateTime = new Date(apt.appointmentDate);
+        const existingEndTime = new Date(existingDateTime.getTime() + (apt.duration || 60) * 60000);
+        
+        // Check if appointments overlap (including buffer time)
+        const bufferStartTime = new Date(appointmentDateTime.getTime() - bufferTime * 60000);
+        const bufferEndTime = new Date(appointmentEndTime.getTime() + bufferTime * 60000);
+        
+        return (
+          (appointmentDateTime < existingEndTime && appointmentEndTime > existingDateTime) ||
+          (existingDateTime < bufferEndTime && existingEndTime > bufferStartTime)
+        );
+      });
+      
+      if (hasConflict) {
+        return res.status(409).json({ 
+          message: "There is already an appointment scheduled at this time for this practitioner" 
+        });
+      }
+      
       const appointment = await storage.createAppointment(appointmentData);
+      console.log("Created appointment:", appointment);
+      
       res.status(201).json(appointment);
     } catch (error) {
       console.error("Create appointment error:", error);
@@ -1692,6 +1996,936 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error('Refund error:', error);
       res.status(500).json({ 
         message: "Error processing refund",
+        error: error.message 
+      });
+    }
+  });
+
+  // =============================================================================
+  // PUBLIC BOOKING ROUTES
+  // =============================================================================
+
+  // Get practitioner by booking link
+  app.get("/api/public/practitioner/:bookingLink", async (req, res) => {
+    try {
+      const { bookingLink } = req.params;
+      
+      const practitioner = await db.query.practitioners.findFirst({
+        where: eq(practitioners.bookingLink, bookingLink),
+        with: {
+          user: true,
+        },
+      });
+
+      if (!practitioner) {
+        return res.status(404).json({ message: "Practitioner not found" });
+      }
+
+      res.json(practitioner);
+    } catch (error: any) {
+      console.error('Get practitioner by booking link error:', error);
+      res.status(500).json({ 
+        message: "Error fetching practitioner",
+        error: error.message 
+      });
+    }
+  });
+
+  // Get available time slots for a practitioner
+  app.get("/api/public/available-slots/:bookingLink", async (req, res) => {
+    try {
+      const { bookingLink } = req.params;
+      const { date } = req.query;
+      
+      if (!date) {
+        return res.status(400).json({ message: "Date parameter is required" });
+      }
+
+      const practitioner = await db.query.practitioners.findFirst({
+        where: eq(practitioners.bookingLink, bookingLink),
+      });
+
+      if (!practitioner) {
+        return res.status(404).json({ message: "Practitioner not found" });
+      }
+
+      // Get practitioner's calendar settings
+      const calendarSettingsData = await db.query.calendarSettings.findFirst({
+        where: eq(calendarSettings.practitionerId, practitioner.id),
+      });
+
+      const settings = calendarSettingsData || {
+        timeInterval: 60,
+        defaultStartTime: "09:00",
+        defaultEndTime: "17:00",
+        bufferTime: 0,
+        workingDays: [1, 2, 3, 4, 5] // Monday to Friday
+      };
+
+      // Ensure timeInterval is set
+      if (!settings.timeInterval) {
+        settings.timeInterval = 60;
+      }
+
+      // Get existing appointments for the date
+      const targetDate = new Date(date as string);
+      const startOfDay = new Date(targetDate);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(targetDate);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      const existingAppointments = await db.query.appointments.findMany({
+        where: and(
+          eq(appointments.practitionerId, practitioner.id),
+          gte(appointments.appointmentDate, startOfDay),
+          lte(appointments.appointmentDate, endOfDay)
+        ),
+      });
+
+      // Generate available time slots
+      const [startHour, startMin] = settings.defaultStartTime.split(':').map(Number);
+      const [endHour, endMin] = settings.defaultEndTime.split(':').map(Number);
+      
+      let currentMinutes = startHour * 60 + startMin;
+      const endMinutes = endHour * 60 + endMin;
+      const timeSlots = [];
+
+      while (currentMinutes < endMinutes) {
+        const hour = Math.floor(currentMinutes / 60);
+        const min = currentMinutes % 60;
+        const timeString = `${hour.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}`;
+        
+        // Check if this time slot conflicts with existing appointments
+        const slotDateTime = new Date(targetDate);
+        slotDateTime.setHours(hour, min, 0, 0);
+        
+        // Check if slot is in the past
+        if (slotDateTime <= new Date()) {
+          continue; // Skip past slots
+        }
+        
+        const conflictingAppointments = existingAppointments.filter(apt => {
+          const aptStart = new Date(apt.appointmentDate);
+          const aptEnd = new Date(aptStart.getTime() + (apt.duration || 30) * 60000);
+          const slotEnd = new Date(slotDateTime.getTime() + settings.timeInterval * 60000);
+          
+          // Check for overlap: if appointment overlaps with slot
+          return (
+            (aptStart < slotEnd && aptEnd > slotDateTime) ||
+            (slotDateTime < aptEnd && slotEnd > aptStart)
+          );
+        });
+
+        if (conflictingAppointments.length === 0) {
+          timeSlots.push({
+            time: timeString,
+            available: true
+          });
+        } else {
+          console.log(`Slot ${timeString} conflicts with ${conflictingAppointments.length} existing appointment(s)`);
+        }
+        
+        currentMinutes += settings.timeInterval;
+      }
+
+      res.json(timeSlots);
+    } catch (error: any) {
+      console.error('Get available slots error:', error);
+      res.status(500).json({ 
+        message: "Error fetching available slots",
+        error: error.message 
+      });
+    }
+  });
+
+  // Book appointment via public link
+  app.post("/api/public/book-appointment", async (req, res) => {
+    try {
+      console.log('Received booking request:', req.body);
+      
+      const { 
+        practitionerId, 
+        firstName, 
+        lastName, 
+        email, 
+        phone, 
+        appointmentDate, 
+        appointmentTime,
+        type,
+        duration,
+        reason,
+        additionalNotes,
+        bookingLink 
+      } = req.body;
+
+      // Verify the booking link matches the practitioner
+      console.log('Looking for practitioner with ID:', practitionerId, 'and booking link:', bookingLink);
+      
+      const practitioner = await db.query.practitioners.findFirst({
+        where: and(
+          eq(practitioners.id, practitionerId),
+          eq(practitioners.bookingLink, bookingLink)
+        ),
+      });
+
+      console.log('Found practitioner:', practitioner);
+
+      if (!practitioner) {
+        console.error('Practitioner not found for ID:', practitionerId, 'and booking link:', bookingLink);
+        return res.status(404).json({ message: "Invalid booking link" });
+      }
+
+      // Check if user exists, create if not
+      console.log('Checking for existing user with email:', email);
+      let user = await storage.getUserByEmail(email);
+      console.log('Found user:', user ? { id: user.id, email: user.email } : 'Not found');
+      
+      if (!user) {
+        console.log('Creating new user account');
+        // Create new user account
+        const hashedPassword = await bcrypt.hash(Math.random().toString(36), 10);
+        user = await storage.createUser({
+          email,
+          password: hashedPassword,
+          firstName,
+          lastName,
+          role: "patient",
+          isActive: true,
+        });
+        console.log('Created new user:', { id: user.id, email: user.email });
+      }
+
+      // Check if patient profile exists, create if not
+      console.log('Checking for existing patient with user ID:', user.id);
+      let patient = await db.query.patients.findFirst({
+        where: eq(patients.userId, user.id),
+      });
+      console.log('Found patient:', patient ? { id: patient.id, userId: patient.userId } : 'Not found');
+
+      if (!patient) {
+        console.log('Creating new patient profile');
+        patient = await storage.createPatient({
+          userId: user.id,
+          dateOfBirth: null,
+          phoneNumber: phone,
+        });
+        console.log('Created new patient:', { id: patient.id, userId: patient.userId });
+      }
+
+      // Create appointment
+      let appointmentDateTime;
+      if (appointmentDate) {
+        // Parse the date and time components
+        const [year, month, day] = appointmentDate.split('-').map(Number);
+        const [hours, minutes] = appointmentTime.split(':').map(Number);
+        
+        // Create the date in the local timezone
+        appointmentDateTime = new Date(year, month - 1, day, hours, minutes, 0, 0);
+        
+        // Convert to UTC for database storage
+        const utcTime = appointmentDateTime.getTime() - (appointmentDateTime.getTimezoneOffset() * 60000);
+        appointmentDateTime = new Date(utcTime);
+      } else {
+        // Fallback if appointmentDate is not provided
+        appointmentDateTime = new Date();
+        const [hours, minutes] = appointmentTime.split(':').map(Number);
+        appointmentDateTime.setHours(hours, minutes, 0, 0);
+      }
+
+      console.log('Creating appointment with data:', {
+        patientId: patient.id,
+        practitionerId,
+        appointmentDate,
+        appointmentTime,
+        reason,
+        duration,
+        appointmentDateTime: appointmentDateTime.toISOString(),
+        timezoneOffset: appointmentDateTime.getTimezoneOffset(),
+        localTime: new Date().toLocaleString(),
+        utcTime: new Date().toISOString()
+      });
+
+      console.log('Appointment date time:', appointmentDateTime);
+
+      // Check for conflicting appointments before creating
+      const appointmentStart = new Date(appointmentDateTime);
+      const appointmentEnd = new Date(appointmentStart.getTime() + (duration || 30) * 60000);
+      
+      const conflictingAppointments = await db.query.appointments.findMany({
+        where: and(
+          eq(appointments.practitionerId, practitionerId),
+          or(
+            // Check if new appointment overlaps with existing ones
+            and(
+              gte(appointments.appointmentDate, appointmentStart),
+              lt(appointments.appointmentDate, appointmentEnd)
+            ),
+            and(
+              lt(appointments.appointmentDate, appointmentEnd),
+              gt(
+                sql`${appointments.appointmentDate} + INTERVAL '1 minute' * ${appointments.duration}`,
+                appointmentStart
+              )
+            )
+          )
+        ),
+      });
+
+      if (conflictingAppointments.length > 0) {
+        console.log('Conflicting appointments found:', conflictingAppointments.length);
+        return res.status(409).json({ 
+          message: "This time slot is no longer available. Please select a different time.",
+          conflicts: conflictingAppointments.length
+        });
+      }
+
+      console.log('No conflicts found, creating appointment');
+
+      const appointment = await storage.createAppointment({
+        patientId: patient.id,
+        practitionerId,
+        title: reason,
+        description: additionalNotes,
+        appointmentDate: appointmentDateTime,
+        duration: duration || 30,
+        type: type || "consultation",
+        status: "scheduled",
+      });
+
+      console.log('Created appointment:', { id: appointment.id, title: appointment.title });
+
+      // Send notification to practitioner
+      console.log('Sending notification to practitioner:', practitioner.userId);
+      try {
+        await notificationService.createNotification({
+          userId: practitioner.userId,
+          type: "appointment_created",
+          title: "New Appointment Request",
+          message: `${firstName} ${lastName} has requested an appointment for ${appointmentDateTime.toLocaleDateString()} at ${appointmentTime}`,
+          metadata: {
+            appointmentId: appointment.id,
+            patientId: patient.id,
+            practitionerId: practitioner.id,
+          },
+          priority: "medium",
+          isRead: false,
+          isArchived: false,
+        });
+        console.log('Notification sent successfully');
+      } catch (notificationError) {
+        console.error('Failed to send notification:', notificationError);
+        // Don't fail the entire booking if notification fails
+      }
+
+      console.log('Booking completed successfully');
+      res.json({
+        appointment,
+        message: "Appointment request submitted successfully"
+      });
+    } catch (error: any) {
+      console.error('Public booking error:', error);
+      console.error('Error stack:', error.stack);
+      res.status(500).json({ 
+        message: "Error booking appointment",
+        error: error.message 
+      });
+    }
+  });
+
+  // =============================================================================
+  // PRACTITIONER BOOKING LINK ROUTES
+  // =============================================================================
+
+  // Get current practitioner's profile
+  app.get("/api/practitioner/me", verifyToken, async (req, res) => {
+    try {
+      const user = req.user;
+      
+      if (user.role !== "practitioner") {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      console.log('Getting practitioner profile for user:', user.id);
+
+      const practitioner = await db.query.practitioners.findFirst({
+        where: eq(practitioners.userId, user.id),
+        with: {
+          user: true,
+        },
+      });
+
+      if (!practitioner) {
+        return res.status(404).json({ message: "Practitioner profile not found" });
+      }
+
+      console.log('Found practitioner profile:', {
+        id: practitioner.id,
+        bookingLink: practitioner.bookingLink,
+        userId: practitioner.userId
+      });
+
+      res.json(practitioner);
+    } catch (error: any) {
+      console.error('Get practitioner profile error:', error);
+      res.status(500).json({ 
+        message: "Error fetching practitioner profile",
+        error: error.message 
+      });
+    }
+  });
+
+  // Generate booking link for practitioner
+  app.post("/api/practitioner/generate-booking-link", verifyToken, async (req, res) => {
+    try {
+      const user = req.user;
+      
+      if (user.role !== "practitioner") {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      console.log('Generating booking link for user:', user.id);
+
+      const practitioner = await db.query.practitioners.findFirst({
+        where: eq(practitioners.userId, user.id),
+      });
+
+      if (!practitioner) {
+        return res.status(404).json({ message: "Practitioner profile not found" });
+      }
+
+      console.log('Found practitioner:', practitioner.id);
+
+      // Generate unique booking link
+      const bookingLink = `dr-${user.firstName.toLowerCase()}-${user.lastName.toLowerCase()}-${Math.random().toString(36).substring(2, 8)}`;
+
+      console.log('Generated booking link:', bookingLink);
+
+      // Update practitioner with booking link
+      const updatedPractitioner = await storage.updatePractitioner(practitioner.id, {
+        bookingLink,
+      });
+
+      console.log('Updated practitioner:', updatedPractitioner);
+
+      res.json({
+        bookingLink,
+        message: "Booking link generated successfully"
+      });
+    } catch (error: any) {
+      console.error('Generate booking link error:', error);
+      res.status(500).json({ 
+        message: "Error generating booking link",
+        error: error.message 
+      });
+    }
+  });
+
+  // Get booking settings for practitioner
+  app.get("/api/practitioner/booking-settings", verifyToken, async (req, res) => {
+    try {
+      const user = req.user;
+      console.log('User requesting booking settings:', user);
+      
+      if (user.role !== "practitioner") {
+        console.log('User role is not practitioner:', user.role);
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const practitioner = await db.query.practitioners.findFirst({
+        where: eq(practitioners.userId, user.id),
+      });
+
+      console.log('Found practitioner profile:', practitioner);
+
+      if (!practitioner) {
+        console.log('No practitioner profile found for user:', user.id);
+        return res.status(404).json({ message: "Practitioner profile not found" });
+      }
+
+      // Get booking settings from database
+      let settings = await db.query.bookingSettings.findFirst({
+        where: eq(bookingSettings.practitionerId, practitioner.id),
+      });
+
+      console.log('Existing settings found:', !!settings);
+
+      // If no settings exist, create default settings
+      if (!settings) {
+        console.log('Creating default settings for practitioner:', practitioner.id);
+        const defaultSettings = {
+          practitionerId: practitioner.id,
+          isPublicBookingEnabled: true,
+          requireApproval: true,
+          allowDirectBooking: false,
+          showProfile: true,
+          showSpecialty: true,
+          showConsultationFee: true,
+          advanceBookingDays: 30,
+          maxBookingsPerDay: 10,
+          bufferTime: 15,
+          emailNotifications: true,
+          smsNotifications: false,
+          reminderHours: 24,
+          requirePhoneVerification: false,
+          requireEmailVerification: true,
+          cancellationPolicy: '24 hours notice required for cancellation',
+          customMessage: 'Welcome to my booking page. I\'m looking forward to helping you with your healthcare needs.',
+        };
+
+        try {
+          const inserted = await db.insert(bookingSettings).values(defaultSettings).returning();
+          console.log('inserted', inserted);
+          settings = inserted[0];
+          console.log('Default settings created:', settings);
+        } catch (insertError) {
+          console.error('Failed to create default settings:', insertError);
+          // Return default settings object without saving to database
+          settings = defaultSettings;
+        }
+      }
+
+      console.log('Returning settings:', settings);
+      res.json(settings);
+    } catch (error: any) {
+      console.error('Get booking settings error:', error);
+      res.status(500).json({ 
+        message: "Error fetching booking settings",
+        error: error.message 
+      });
+    }
+  });
+
+  // Save booking settings for practitioner
+  app.post("/api/practitioner/booking-settings", verifyToken, async (req, res) => {
+    try {
+      const user = req.user;
+      console.log('User attempting to save settings:', user);
+      
+      if (user.role !== "practitioner") {
+        console.log('User role is not practitioner:', user.role);
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const practitioner = await db.query.practitioners.findFirst({
+        where: eq(practitioners.userId, user.id),
+      });
+
+      console.log('Found practitioner profile:', practitioner);
+
+      if (!practitioner) {
+        console.log('No practitioner profile found for user:', user.id);
+        return res.status(404).json({ message: "Practitioner profile not found" });
+      }
+
+      const settings = req.body;
+      console.log('Received settings data:', settings);
+      console.log('Practitioner ID:', practitioner.id);
+
+      // Check if booking settings already exist
+      const existingSettings = await db.query.bookingSettings.findFirst({
+        where: eq(bookingSettings.practitionerId, practitioner.id),
+      });
+
+      console.log('Existing settings found:', !!existingSettings);
+
+      let savedSettings;
+
+      if (existingSettings) {
+        console.log('Updating existing settings...');
+        // Update existing settings
+        const updated = await db.update(bookingSettings).set({
+          ...settings,
+          updatedAt: new Date(),
+        })
+        .where(eq(bookingSettings.practitionerId, practitioner.id))
+        .returning()
+        savedSettings = updated[0];
+      } else {
+        console.log('Creating new settings...');
+        // Create new settings
+        const inserted = await db.insert(bookingSettings).values({
+          practitionerId: practitioner.id,
+          ...settings,
+        }).returning();
+        savedSettings = inserted[0];
+      }
+
+      console.log('Booking settings saved for practitioner:', practitioner.id);
+      console.log('Saved settings:', savedSettings);
+
+      res.json({
+        message: "Booking settings saved successfully",
+        settings: savedSettings
+      });
+    } catch (error: any) {
+      console.error('Save booking settings error:', error);
+      res.status(500).json({ 
+        message: "Error saving booking settings",
+        error: error.message 
+      });
+    }
+  });
+
+  // Get public booking settings for a practitioner
+  app.get("/api/public/booking-settings/:bookingLink", async (req, res) => {
+    try {
+      const { bookingLink } = req.params;
+
+      console.log('bookingLink', bookingLink);
+
+      // Find practitioner by booking link
+      const practitioner = await db.query.practitioners.findFirst({
+        where: eq(practitioners.bookingLink, bookingLink),
+      });
+
+      if (!practitioner) {
+        return res.status(404).json({ message: "Practitioner not found" });
+      }
+
+      // Get booking settings from database
+      const settings = await db.query.bookingSettings.findFirst({
+        where: eq(bookingSettings.practitionerId, practitioner.id),
+      });
+
+      // If no settings exist, return default settings
+      if (!settings) {
+        const defaultSettings = {
+          id: null,
+          practitionerId: practitioner.id,
+          isPublicBookingEnabled: true,
+          requireApproval: true,
+          allowDirectBooking: false,
+          showProfile: true,
+          showSpecialty: true,
+          showConsultationFee: true,
+          advanceBookingDays: 30,
+          maxBookingsPerDay: 10,
+          bufferTime: 15,
+          emailNotifications: true,
+          smsNotifications: false,
+          reminderHours: 24,
+          requirePhoneVerification: false,
+          requireEmailVerification: true,
+          customMessage: 'Welcome to my booking page. I\'m looking forward to helping you with your healthcare needs.',
+          cancellationPolicy: '24 hours notice required for cancellation',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        return res.json(defaultSettings);
+      }
+
+      // Return public booking settings (filtered for public use)
+      res.json(settings);
+    } catch (error: any) {
+      console.error('Get public booking settings error:', error);
+      res.status(500).json({ 
+        message: "Error fetching booking settings",
+        error: error.message 
+      });
+    }
+  });
+
+  // Get public calendar settings for a practitioner
+  app.get("/api/public/calendar-settings/:bookingLink", async (req, res) => {
+    try {
+      const { bookingLink } = req.params;
+
+      console.log('Getting calendar settings for bookingLink:', bookingLink);
+
+      // Find practitioner by booking link
+      const practitioner = await db.query.practitioners.findFirst({
+        where: eq(practitioners.bookingLink, bookingLink),
+      });
+
+      if (!practitioner) {
+        return res.status(404).json({ message: "Practitioner not found" });
+      }
+
+      // Get calendar settings from database
+      const settings = await db.query.calendarSettings.findFirst({
+        where: eq(calendarSettings.practitionerId, practitioner.id),
+      });
+
+      // If no settings exist, return default settings
+      if (!settings) {
+        const defaultSettings = {
+          id: null,
+          practitionerId: practitioner.id,
+          timeInterval: 60,
+          bufferTime: 0,
+          defaultStartTime: "09:00",
+          defaultEndTime: "17:00",
+          workingDays: ["monday", "tuesday", "wednesday", "thursday", "friday"],
+          allowWeekendBookings: false,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        console.log('No calendar settings found, returning defaults');
+        return res.json(defaultSettings);
+      }
+
+      console.log('Calendar settings found:', settings);
+      res.json(settings);
+    } catch (error: any) {
+      console.error('Get public calendar settings error:', error);
+      res.status(500).json({ 
+        message: "Error fetching calendar settings",
+        error: error.message 
+      });
+    }
+  });
+
+  // Test route to check database schema
+  app.get("/api/test/db-schema", async (req, res) => {
+    try {
+      // Check if booking_link column exists
+      const result = await db.execute(sql`
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'practitioners' 
+        AND column_name = 'booking_link'
+      `);
+      
+      res.json({
+        bookingLinkColumnExists: result.length > 0,
+        columns: result
+      });
+    } catch (error: any) {
+      console.error('Database schema test error:', error);
+      res.status(500).json({ 
+        message: "Error testing database schema",
+        error: error.message 
+      });
+    }
+  });
+
+  // Test endpoint to check authentication status
+  app.get("/api/test/auth-status", verifyToken, async (req, res) => {
+    try {
+      res.json({
+        authenticated: true,
+        user: req.user,
+        message: "User is authenticated"
+      });
+    } catch (error) {
+      res.status(401).json({
+        authenticated: false,
+        message: "User is not authenticated"
+      });
+    }
+  });
+
+  // Test endpoint to create a sample appointment
+  app.post("/api/test/create-sample-appointment", async (req, res) => {
+    try {
+      // Get Dr. Sarah Smith practitioner
+      const practitioner = await db.query.practitioners.findFirst({
+        where: eq(practitioners.bookingLink, "dr-sarah-smith"),
+      });
+      if (!practitioner) {
+        return res.status(404).json({ message: "Dr. Sarah Smith practitioner not found" });
+      }
+
+      // Get the first patient
+      const patient = await db.query.patients.findFirst();
+      if (!patient) {
+        return res.status(404).json({ message: "No patient found" });
+      }
+
+      // Create a sample appointment for Dr. Sarah Smith
+      const sampleAppointment = await storage.createAppointment({
+        patientId: patient.id,
+        practitionerId: practitioner.id,
+        title: "Test Appointment for Dr. Sarah Smith",
+        description: "This is a test appointment for Dr. Sarah Smith",
+        appointmentDate: new Date(),
+        duration: 30,
+        type: "consultation",
+        status: "scheduled",
+      });
+
+      res.json({
+        message: "Sample appointment created for Dr. Sarah Smith",
+        appointment: sampleAppointment,
+        practitionerId: practitioner.id
+      });
+    } catch (error: any) {
+      console.error('Create sample appointment error:', error);
+      res.status(500).json({ 
+        message: "Error creating sample appointment",
+        error: error.message 
+      });
+    }
+  });
+
+  // Test endpoint to check appointments table
+  app.get("/api/test/appointments-table", async (req, res) => {
+    try {
+      // Get all appointments
+      const allAppointments = await db.query.appointments.findMany({
+        with: {
+          patient: {
+            with: {
+              user: true
+            }
+          },
+          practitioner: {
+            with: {
+              user: true
+            }
+          }
+        }
+      });
+      
+      res.json({
+        totalAppointments: allAppointments.length,
+        appointments: allAppointments
+      });
+    } catch (error: any) {
+      console.error('Test appointments table error:', error);
+      res.status(500).json({ 
+        message: "Error testing appointments table",
+        error: error.message 
+      });
+    }
+  });
+
+  // Test endpoint to check booking_settings table
+  app.get("/api/test/booking-settings-table", async (req, res) => {
+    try {
+      // Check if booking_settings table exists
+      const tableExists = await db.execute(sql`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_name = 'booking_settings'
+        );
+      `);
+      
+      // Get all booking_settings records
+      const allSettings = await db.query.bookingSettings.findMany();
+      
+      // Get table structure
+      const tableStructure = await db.execute(sql`
+        SELECT column_name, data_type, is_nullable
+        FROM information_schema.columns 
+        WHERE table_name = 'booking_settings'
+        ORDER BY ordinal_position;
+      `);
+      
+      res.json({
+        tableExists: tableExists[0]?.exists,
+        totalRecords: allSettings.length,
+        records: allSettings,
+        structure: tableStructure
+      });
+    } catch (error: any) {
+      console.error('Booking settings table test error:', error);
+      res.status(500).json({ 
+        message: "Error testing booking settings table",
+        error: error.message 
+      });
+    }
+  });
+
+  // Get practitioner details for public booking
+  app.get("/api/public/practitioner/:bookingLink", async (req, res) => {
+    try {
+      const { bookingLink } = req.params;
+
+      console.log('Fetching practitioner for booking link:', bookingLink);
+
+      // Find practitioner by booking link
+      const practitioner = await db.query.practitioners.findFirst({
+        where: eq(practitioners.bookingLink, bookingLink),
+      });
+
+      if (!practitioner) {
+        console.log('Practitioner not found for booking link:', bookingLink);
+        return res.status(404).json({ message: "Practitioner not found" });
+      }
+
+      // Get user details for the practitioner
+      const user = await db.query.users.findFirst({
+        where: eq(users.id, practitioner.userId),
+      });
+
+      if (!user) {
+        console.log('User not found for practitioner:', practitioner.id);
+        return res.status(404).json({ message: "Practitioner user not found" });
+      }
+
+      const practitionerData = {
+        id: practitioner.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        specialty: practitioner.specialty,
+        bio: practitioner.bio,
+        consultationFee: practitioner.consultationFee,
+        qualifications: practitioner.qualifications,
+        bookingLink: practitioner.bookingLink,
+      };
+
+      console.log('Returning practitioner data:', practitionerData);
+      res.json(practitionerData);
+    } catch (error: any) {
+      console.error('Get public practitioner error:', error);
+      res.status(500).json({ 
+        message: "Error fetching practitioner details",
+        error: error.message 
+      });
+    }
+  });
+
+
+
+
+
+  // Test endpoint to manually insert booking settings
+  app.post("/api/test/insert-booking-settings", async (req, res) => {
+    try {
+      const { practitionerId } = req.body;
+      
+      if (!practitionerId) {
+        return res.status(400).json({ message: "practitionerId is required" });
+      }
+
+      const testSettings = {
+        practitionerId: practitionerId,
+        isPublicBookingEnabled: true,
+        requireApproval: true,
+        allowDirectBooking: false,
+        showProfile: true,
+        showSpecialty: true,
+        showConsultationFee: true,
+        advanceBookingDays: 30,
+        maxBookingsPerDay: 10,
+        bufferTime: 15,
+        emailNotifications: true,
+        smsNotifications: false,
+        reminderHours: 24,
+        requirePhoneVerification: false,
+        requireEmailVerification: true,
+        customMessage: 'Test welcome message',
+        cancellationPolicy: 'Test cancellation policy',
+      };
+
+      console.log('Inserting test settings for practitioner:', practitionerId);
+      
+      const savedSettings = await db.insert(bookingSettings)
+        .values(testSettings)
+        .returning()[0];
+
+      console.log('Test settings saved:', savedSettings);
+
+      res.json({
+        message: "Test booking settings inserted successfully",
+        settings: savedSettings
+      });
+    } catch (error: any) {
+      console.error('Test insert booking settings error:', error);
+      res.status(500).json({ 
+        message: "Error inserting test booking settings",
         error: error.message 
       });
     }

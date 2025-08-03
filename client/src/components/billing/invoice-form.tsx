@@ -19,7 +19,7 @@ import { api } from "@/lib/api";
 const invoiceSchema = z.object({
   patientId: z.string().min(1, "Patient is required"),
   practitionerId: z.string().min(1, "Practitioner is required"),
-  appointmentId: z.string().optional().nullable(),
+  appointmentId: z.string().optional(),
   amount: z.string().min(1, "Amount is required").refine((val) => !isNaN(Number(val)) && Number(val) > 0, {
     message: "Amount must be a positive number",
   }),
@@ -46,7 +46,7 @@ export function InvoiceForm({ invoice, onSuccess, onCancel }: InvoiceFormProps) 
     defaultValues: {
       patientId: invoice?.patientId || "",
       practitionerId: invoice?.practitionerId || "",
-      appointmentId: invoice?.appointmentId || "",
+      appointmentId: invoice?.appointmentId || undefined,
       amount: invoice?.amount || "",
       tax: invoice?.tax || "0",
       description: invoice?.description || "",
@@ -55,19 +55,21 @@ export function InvoiceForm({ invoice, onSuccess, onCancel }: InvoiceFormProps) 
   });
 
   // Fetch patients for selection
-  const { data: patients } = useQuery({
+  const { data: patients, isLoading: patientsLoading, error: patientsError } = useQuery({
     queryKey: ["/api/patients"],
     queryFn: async () => {
       const response = await api.get("/api/patients?limit=100");
+      console.log("Patients data:", response);
       return response;
     },
   });
 
   // Fetch practitioners for selection
-  const { data: practitioners } = useQuery({
+  const { data: practitioners, isLoading: practitionersLoading, error: practitionersError } = useQuery({
     queryKey: ["/api/practitioners"],
     queryFn: async () => {
       const response = await api.get("/api/practitioners?limit=100");
+      console.log("Practitioners data:", response);
       return response;
     },
   });
@@ -182,16 +184,29 @@ export function InvoiceForm({ invoice, onSuccess, onCancel }: InvoiceFormProps) 
                     <FormLabel>Patient</FormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value}>
                       <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select patient" />
+                        <SelectTrigger disabled={patientsLoading}>
+                          <SelectValue placeholder={patientsLoading ? "Loading patients..." : "Select patient"} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        {patients?.map((patient: any) => (
-                          <SelectItem key={patient.id} value={patient.id}>
-                            {patient.user?.firstName} {patient.user?.lastName}
-                          </SelectItem>
-                        ))}
+                        {patientsLoading ? (
+                          <div className="px-2 py-1.5 text-sm text-slate-500">Loading patients...</div>
+                        ) : patientsError ? (
+                          <div className="px-2 py-1.5 text-sm text-red-500">Error loading patients</div>
+                        ) : patients?.length === 0 ? (
+                          <div className="px-2 py-1.5 text-sm text-slate-500">No patients found</div>
+                        ) : (
+                          patients?.map((patient: any) => (
+                            <SelectItem key={patient.id} value={patient.id}>
+                              {patient.user?.firstName && patient.user?.lastName 
+                                ? `${patient.user.firstName} ${patient.user.lastName}`
+                                : patient.user?.email 
+                                ? patient.user.email
+                                : `Patient ${patient.id.slice(0, 8)}...`
+                              }
+                            </SelectItem>
+                          ))
+                        )}
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -207,16 +222,29 @@ export function InvoiceForm({ invoice, onSuccess, onCancel }: InvoiceFormProps) 
                     <FormLabel>Practitioner</FormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value}>
                       <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select practitioner" />
+                        <SelectTrigger disabled={practitionersLoading}>
+                          <SelectValue placeholder={practitionersLoading ? "Loading practitioners..." : "Select practitioner"} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        {practitioners?.map((practitioner: any) => (
-                          <SelectItem key={practitioner.id} value={practitioner.id}>
-                            Dr. {practitioner.user?.firstName} {practitioner.user?.lastName}
-                          </SelectItem>
-                        ))}
+                        {practitionersLoading ? (
+                          <div className="px-2 py-1.5 text-sm text-slate-500">Loading practitioners...</div>
+                        ) : practitionersError ? (
+                          <div className="px-2 py-1.5 text-sm text-red-500">Error loading practitioners</div>
+                        ) : practitioners?.length === 0 ? (
+                          <div className="px-2 py-1.5 text-sm text-slate-500">No practitioners found</div>
+                        ) : (
+                          practitioners?.map((practitioner: any) => (
+                            <SelectItem key={practitioner.id} value={practitioner.id}>
+                              {practitioner.user?.firstName && practitioner.user?.lastName 
+                                ? `Dr. ${practitioner.user.firstName} ${practitioner.user.lastName}`
+                                : practitioner.user?.email 
+                                ? `Dr. ${practitioner.user.email}`
+                                : `Practitioner ${practitioner.id.slice(0, 8)}...`
+                              }
+                            </SelectItem>
+                          ))
+                        )}
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -237,11 +265,15 @@ export function InvoiceForm({ invoice, onSuccess, onCancel }: InvoiceFormProps) 
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        {appointments?.map((appointment: any) => (
-                          <SelectItem key={appointment.id} value={appointment.id}>
-                            {appointment.title} - {format(new Date(appointment.appointmentDate), "MMM dd, yyyy")}
-                          </SelectItem>
-                        ))}
+                        {appointments?.length === 0 ? (
+                          <div className="px-2 py-1.5 text-sm text-slate-500">No appointments found for this patient</div>
+                        ) : (
+                          appointments?.map((appointment: any) => (
+                            <SelectItem key={appointment.id} value={appointment.id}>
+                              {appointment.title} - {format(new Date(appointment.appointmentDate), "MMM dd, yyyy")}
+                            </SelectItem>
+                          ))
+                        )}
                       </SelectContent>
                     </Select>
                     <FormMessage />

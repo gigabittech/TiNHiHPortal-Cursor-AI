@@ -22,7 +22,7 @@ export function InvoiceList({ onNewInvoice }: InvoiceListProps) {
   const [editingInvoice, setEditingInvoice] = useState<any>(null);
   const [viewingInvoice, setViewingInvoice] = useState<any>(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -223,7 +223,10 @@ export function InvoiceList({ onNewInvoice }: InvoiceListProps) {
               />
             </div>
             
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <Select 
+              value={statusFilter || "all"} 
+              onValueChange={(value) => setStatusFilter(value || "all")}
+            >
               <SelectTrigger className="w-40">
                 <SelectValue placeholder="Filter by status" />
               </SelectTrigger>
@@ -265,12 +268,22 @@ export function InvoiceList({ onNewInvoice }: InvoiceListProps) {
                       </div>
                       
                       <div className="text-sm text-slate-600 mb-2">
-                        <span className="font-medium">Patient:</span> {invoice.patient?.user ? `${invoice.patient.user.firstName} ${invoice.patient.user.lastName}` : 'Unknown Patient'}
+                        <span className="font-medium">Patient:</span> {invoice.patient?.user?.firstName && invoice.patient?.user?.lastName 
+                          ? `${invoice.patient.user.firstName} ${invoice.patient.user.lastName}`
+                          : invoice.patient?.user?.email 
+                          ? invoice.patient.user.email
+                          : 'Unknown Patient'
+                        }
                         <span className="mx-2">•</span>
                         <span className="font-medium">Amount:</span> ${Number(invoice.total || 0).toFixed(2)}
                       </div>
                       <div className="text-sm text-slate-500 mb-2">
-                        <span className="font-medium">Practitioner:</span> {invoice.practitioner?.user ? `Dr. ${invoice.practitioner.user.firstName} ${invoice.practitioner.user.lastName}` : 'Unknown Practitioner'}
+                        <span className="font-medium">Practitioner:</span> {invoice.practitioner?.user?.firstName && invoice.practitioner?.user?.lastName 
+                          ? `Dr. ${invoice.practitioner.user.firstName} ${invoice.practitioner.user.lastName}`
+                          : invoice.practitioner?.user?.email 
+                          ? `Dr. ${invoice.practitioner.user.email}`
+                          : 'Unknown Practitioner'
+                        }
                       </div>
                       
                       <div className="text-sm text-slate-500 mb-2">

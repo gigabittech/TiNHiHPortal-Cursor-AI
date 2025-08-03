@@ -24,6 +24,8 @@ export const users = pgTable("users", {
   role: userRoleEnum("role").notNull().default("patient"),
   isActive: boolean("is_active").notNull().default(true),
   lastLoginAt: timestamp("last_login_at"),
+  resetToken: text("reset_token"),
+  resetTokenExpiry: timestamp("reset_token_expiry"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 });
@@ -55,6 +57,7 @@ export const practitioners = pgTable("practitioners", {
   qualifications: jsonb("qualifications").$type<string[]>().default([]),
   bio: text("bio"),
   consultationFee: decimal("consultation_fee", { precision: 10, scale: 2 }),
+  bookingLink: text("booking_link").unique().default(null), // Unique public booking link
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 });
@@ -62,6 +65,7 @@ export const practitioners = pgTable("practitioners", {
 // Appointments table
 export const appointments = pgTable("appointments", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  readableId: text("readable_id").notNull().unique().default(sql`substring(md5(random()::text), 1, 8)`),
   patientId: uuid("patient_id").notNull().references(() => patients.id, { onDelete: "cascade" }),
   practitionerId: uuid("practitioner_id").notNull().references(() => practitioners.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
@@ -249,6 +253,30 @@ export const calendarSettings = pgTable("calendar_settings", {
   defaultEndTime: text("default_end_time").notNull().default("17:00"),
   workingDays: text("working_days").array().notNull().default(sql`ARRAY['monday', 'tuesday', 'wednesday', 'thursday', 'friday']`),
   allowWeekendBookings: boolean("allow_weekend_bookings").default(false),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+});
+
+// Booking Settings table
+export const bookingSettings = pgTable("booking_settings", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  practitionerId: uuid("practitioner_id").notNull().references(() => practitioners.id, { onDelete: "cascade" }),
+  isPublicBookingEnabled: boolean("is_public_booking_enabled").notNull().default(true),
+  requireApproval: boolean("require_approval").notNull().default(true),
+  allowDirectBooking: boolean("allow_direct_booking").notNull().default(false),
+  showProfile: boolean("show_profile").notNull().default(true),
+  showSpecialty: boolean("show_specialty").notNull().default(true),
+  showConsultationFee: boolean("show_consultation_fee").notNull().default(true),
+  advanceBookingDays: integer("advance_booking_days").notNull().default(30),
+  maxBookingsPerDay: integer("max_bookings_per_day").notNull().default(10),
+  bufferTime: integer("buffer_time").notNull().default(15),
+  emailNotifications: boolean("email_notifications").notNull().default(true),
+  smsNotifications: boolean("sms_notifications").notNull().default(false),
+  reminderHours: integer("reminder_hours").notNull().default(24),
+  requirePhoneVerification: boolean("require_phone_verification").notNull().default(false),
+  requireEmailVerification: boolean("require_email_verification").notNull().default(true),
+  customMessage: text("custom_message").default('Welcome to my booking page. I\'m looking forward to helping you with your healthcare needs.'),
+  cancellationPolicy: text("cancellation_policy").default('24 hours notice required for cancellation'),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 });
@@ -469,6 +497,12 @@ export const insertCalendarSettingsSchema = createInsertSchema(calendarSettings)
   updatedAt: true,
 });
 
+export const insertBookingSettingsSchema = createInsertSchema(bookingSettings).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 // Types
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -495,6 +529,8 @@ export type UserPreferences = typeof userPreferences.$inferSelect;
 export type InsertUserPreferences = z.infer<typeof insertUserPreferencesSchema>;
 export type CalendarSettings = typeof calendarSettings.$inferSelect;
 export type InsertCalendarSettings = z.infer<typeof insertCalendarSettingsSchema>;
+export type BookingSettings = typeof bookingSettings.$inferSelect;
+export type InsertBookingSettings = z.infer<typeof insertBookingSettingsSchema>;
 
 // Additional types for API responses
 export type PatientWithUser = Patient & { user: User };

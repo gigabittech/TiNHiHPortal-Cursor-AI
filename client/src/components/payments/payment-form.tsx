@@ -23,11 +23,17 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { DemoPaymentNotice } from "./demo-payment-notice";
 
-// Load Stripe outside of component to avoid recreating on every render
-if (!import.meta.env.VITE_STRIPE_PUBLIC_KEY) {
-  throw new Error('Missing required Stripe key: VITE_STRIPE_PUBLIC_KEY');
-}
-const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY);
+// Load Stripe conditionally to avoid errors during app initialization
+const getStripePromise = () => {
+  const stripeKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY;
+  if (!stripeKey) {
+    console.warn('Stripe public key not found. Payment features will be disabled.');
+    return null;
+  }
+  return loadStripe(stripeKey);
+};
+
+const stripePromise = getStripePromise();
 
 interface PaymentFormProps {
   invoice: any;
@@ -266,6 +272,24 @@ export function StripePaymentWrapper({ invoice, onSuccess, onCancel }: StripePay
   const [error, setError] = useState("");
   const { toast } = useToast();
 
+  // Check if Stripe is available
+  if (!stripePromise) {
+    return (
+      <div className="text-center py-8">
+        <div className="text-amber-600 mb-4">
+          <AlertCircle className="w-8 h-8 mx-auto mb-2" />
+          <p className="font-medium">Payment Processing Unavailable</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            Stripe payment processing is not configured. Please contact support.
+          </p>
+        </div>
+        <Button onClick={onCancel} variant="outline">
+          Go Back
+        </Button>
+      </div>
+    );
+  }
+
   useEffect(() => {
     // Create payment intent when component mounts (when modal opens)
     const createPaymentIntent = async () => {
@@ -312,7 +336,7 @@ export function StripePaymentWrapper({ invoice, onSuccess, onCancel }: StripePay
     return (
       <div className="text-center py-8">
         <div className="text-red-600 mb-4">
-          <XCircle className="w-8 h-8 mx-auto mb-2" />
+          <AlertCircle className="w-8 h-8 mx-auto mb-2" />
           <p className="font-medium">Payment initialization failed</p>
           <p className="text-sm text-muted-foreground mt-1">{error}</p>
         </div>

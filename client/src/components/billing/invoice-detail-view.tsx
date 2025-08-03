@@ -448,42 +448,44 @@ export function InvoiceDetailView({ invoice, onEdit, onClose }: InvoiceDetailVie
   return (
     <div className="max-w-4xl mx-auto">
       {/* Action Header */}
-      <div className="bg-white border-b px-6 py-4 flex items-center justify-between">
+      <div className="bg-white border-b px-6 py-4 flex items-center justify-between sticky top-0 z-10">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" onClick={onClose} className="text-slate-600 hover:text-slate-900">
+          <Button variant="ghost" onClick={onClose} className="text-slate-600 hover:text-slate-900 hover:bg-slate-100">
             <ArrowLeft className="w-4 h-4 mr-2" />
             Go Back
           </Button>
+          <div className="h-6 w-px bg-slate-300"></div>
           <div>
-            <h1 className="text-lg font-semibold">Invoice {invoice.invoiceNumber}</h1>
+            <h1 className="text-lg font-semibold text-slate-900">Invoice {invoice.invoiceNumber}</h1>
+            <p className="text-sm text-slate-500">Invoice Details</p>
           </div>
         </div>
         
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           {/* Always show payment button for testing purposes */}
-          <Button onClick={() => setShowPaymentDialog(true)} className="bg-primary hover:bg-primary/90">
+          <Button onClick={() => setShowPaymentDialog(true)} className="bg-primary hover:bg-primary/90 text-white">
             <CreditCard className="w-4 h-4 mr-2" />
             Make Payment
           </Button>
           
-          <Button variant="outline" onClick={() => setShowPaymentHistory(true)}>
+          <Button variant="outline" onClick={() => setShowPaymentHistory(true)} className="border-slate-300 hover:bg-slate-50">
             <History className="w-4 h-4 mr-2" />
             Payment History
           </Button>
           
           {!isPatient && (
             <>
-              <Button variant="outline" onClick={handleDownload}>
+              <Button variant="outline" onClick={handleDownload} className="border-slate-300 hover:bg-slate-50">
                 <Download className="w-4 h-4 mr-2" />
                 Download
               </Button>
-              <Button variant="outline" onClick={handlePrint}>
+              <Button variant="outline" onClick={handlePrint} className="border-slate-300 hover:bg-slate-50">
                 <Printer className="w-4 h-4 mr-2" />
                 Print
               </Button>
               <Sheet open={showEmailSheet} onOpenChange={setShowEmailSheet}>
                 <SheetTrigger asChild>
-                  <Button variant="outline">
+                  <Button variant="outline" className="border-slate-300 hover:bg-slate-50">
                     <Mail className="w-4 h-4 mr-2" />
                     Send Email
                   </Button>
@@ -526,7 +528,7 @@ export function InvoiceDetailView({ invoice, onEdit, onClose }: InvoiceDetailVie
                   </div>
                 </SheetContent>
               </Sheet>
-              <Button variant="outline" onClick={onEdit}>
+              <Button variant="outline" onClick={onEdit} className="border-slate-300 hover:bg-slate-50">
                 <Edit className="w-4 h-4 mr-2" />
                 Edit
               </Button>
@@ -535,6 +537,7 @@ export function InvoiceDetailView({ invoice, onEdit, onClose }: InvoiceDetailVie
                   variant="outline"
                   onClick={() => updateStatusMutation.mutate({ status: "paid" })}
                   disabled={updateStatusMutation.isPending}
+                  className="border-green-300 text-green-700 hover:bg-green-50"
                 >
                   Mark as Paid
                 </Button>
@@ -576,7 +579,12 @@ export function InvoiceDetailView({ invoice, onEdit, onClose }: InvoiceDetailVie
             <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">Bill To</h3>
             <div className="space-y-1">
               <p className="font-semibold text-slate-900">
-                {invoice.patient?.user?.firstName || 'N/A'} {invoice.patient?.user?.lastName || 'N/A'}
+                {invoice.patient?.user?.firstName && invoice.patient?.user?.lastName 
+                  ? `${invoice.patient.user.firstName} ${invoice.patient.user.lastName}`
+                  : invoice.patient?.user?.email 
+                  ? invoice.patient.user.email
+                  : 'Unknown Patient'
+                }
               </p>
               <p className="text-slate-600">{invoice.patient?.user?.email || 'N/A'}</p>
               <p className="text-slate-600">{invoice.patient?.user?.phone || 'N/A'}</p>
@@ -683,7 +691,12 @@ export function InvoiceDetailView({ invoice, onEdit, onClose }: InvoiceDetailVie
             <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">From</h3>
             <div className="space-y-1">
               <p className="font-semibold text-slate-900">
-                Dr. {invoice.practitioner?.user?.firstName || 'N/A'} {invoice.practitioner?.user?.lastName || 'N/A'}
+                {invoice.practitioner?.user?.firstName && invoice.practitioner?.user?.lastName 
+                  ? `Dr. ${invoice.practitioner.user.firstName} ${invoice.practitioner.user.lastName}`
+                  : invoice.practitioner?.user?.email 
+                  ? `Dr. ${invoice.practitioner.user.email}`
+                  : 'Unknown Practitioner'
+                }
               </p>
               <p className="font-semibold text-slate-600">TiNHiH Portal Healthcare</p>
               <p className="text-slate-600">{invoice.practitioner?.user?.email || 'contact@tinhih.com'}</p>

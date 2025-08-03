@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import NotFound from "@/pages/not-found";
 import Login from "@/pages/login";
+import ResetPassword from "@/pages/reset-password";
 import Dashboard from "@/pages/dashboard";
 import Patients from "@/pages/patients";
 import Calendar from "@/pages/calendar";
@@ -23,6 +24,7 @@ import Reports from "@/pages/reports";
 import Telehealth from "@/pages/telehealth";
 import Settings from "@/pages/settings";
 import PatientPortal from "@/pages/patient-portal";
+import PublicBooking from "@/pages/public-booking";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
@@ -86,6 +88,15 @@ function Router() {
   return (
     <Switch>
       <Route path="/login" component={Login} />
+      <Route path="/reset-password" component={ResetPassword} />
+      
+      {/* Public booking route - no authentication required */}
+      <Route path="/book/:bookingLink">
+        {({ bookingLink }: { bookingLink: string }) => (
+          <PublicBooking bookingLink={bookingLink} />
+        )}
+      </Route>
+      
       <Route path="/patient-portal">
         <ProtectedRoute>
           <PatientPortal />
