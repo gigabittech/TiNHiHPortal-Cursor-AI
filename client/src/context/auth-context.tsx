@@ -1,5 +1,4 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
 
 interface User {
@@ -17,6 +16,8 @@ interface AuthContextType {
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (userData: any) => Promise<void>;
+  forgotPassword: (email: string) => Promise<void>;
+  resetPassword: (token: string, newPassword: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -26,7 +27,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<any | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const { toast } = useToast();
 
   useEffect(() => {
     checkAuth();
@@ -60,18 +60,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Fetch profile after login
       const profileResponse = await api.get("/api/auth/me");
       setProfile(profileResponse.profile);
-
-      toast({
-        title: "Welcome back!",
-        description: `Logged in as ${response.user.firstName} ${response.user.lastName}`,
-      });
     } catch (error: any) {
-      toast({
-        title: "Login failed",
-        description: error.message || "Invalid credentials",
-        variant: "destructive",
-      });
-      throw error;
+      // Provide specific error messages based on the error
+      if (error.status === 401) {
+        throw new Error("Invalid email or password. Please check your credentials.");
+      } else if (error.status === 404) {
+        throw new Error("User not found. Please check your email address.");
+      } else if (error.status === 0) {
+        throw new Error("Network error. Please check your internet connection.");
+      } else {
+        throw new Error(error.message || "Login failed. Please try again.");
+      }
     }
   };
 
@@ -81,18 +80,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       localStorage.setItem("token", response.token);
       setUser(response.user);
-
-      toast({
-        title: "Account created!",
-        description: `Welcome, ${response.user.firstName}!`,
-      });
     } catch (error: any) {
-      toast({
-        title: "Registration failed",
-        description: error.message || "Failed to create account",
-        variant: "destructive",
-      });
-      throw error;
+      // Provide specific error messages based on the error
+      if (error.status === 400) {
+        if (error.message?.includes("already exists")) {
+          throw new Error("An account with this email already exists. Please use a different email or try logging in.");
+        } else {
+          throw new Error("Invalid registration data. Please check your information.");
+        }
+      } else if (error.status === 0) {
+        throw new Error("Network error. Please check your internet connection.");
+      } else {
+        throw new Error(error.message || "Registration failed. Please try again.");
+      }
+    }
+  };
+
+  const forgotPassword = async (email: string) => {
+    try {
+      await api.post("/api/auth/forgot-password", { email });
+    } catch (error: any) {
+      if (error.status === 0) {
+        throw new Error("Network error. Please check your internet connection.");
+      } else {
+        throw new Error(error.message || "Failed to send password reset email. Please try again.");
+      }
+    }
+  };
+
+  const resetPassword = async (token: string, newPassword: string) => {
+    try {
+      await api.post("/api/auth/reset-password", { token, newPassword });
+    } catch (error: any) {
+      if (error.status === 400) {
+        throw new Error("Invalid or expired reset token. Please request a new password reset.");
+      } else if (error.status === 0) {
+        throw new Error("Network error. Please check your internet connection.");
+      } else {
+        throw new Error(error.message || "Failed to reset password. Please try again.");
+      }
     }
   };
 
@@ -100,10 +126,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem("token");
     setUser(null);
     setProfile(null);
-    toast({
-      title: "Logged out",
-      description: "You have been successfully logged out",
-    });
   };
 
   return (
@@ -113,6 +135,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoading,
       login,
       register,
+      forgotPassword,
+      resetPassword,
       logout,
     }}>
       {children}

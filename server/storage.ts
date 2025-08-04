@@ -33,6 +33,7 @@ export interface IStorage {
   getPractitioners(): Promise<PractitionerWithUser[]>;
   getPractitionerByUserId(userId: string): Promise<Practitioner | undefined>;
   createPractitioner(insertPractitioner: InsertPractitioner): Promise<Practitioner>;
+  updatePractitioner(id: string, updates: Partial<Practitioner>): Promise<Practitioner | undefined>;
 
   // Appointment methods
   getAppointments(practitionerId?: string, patientId?: string): Promise<AppointmentWithDetails[]>;
@@ -214,13 +215,26 @@ export class DatabaseStorage implements IStorage {
     return practitioner;
   }
 
+  async updatePractitioner(id: string, updates: Partial<Practitioner>): Promise<Practitioner | undefined> {
+    const [practitioner] = await db
+      .update(practitioners)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(practitioners.id, id))
+      .returning();
+    return practitioner || undefined;
+  }
+
   async getAppointments(practitionerId?: string, patientId?: string): Promise<AppointmentWithDetails[]> {
+    const patientUsers = alias(users, 'patientUsers');
+    const practitionerUsers = alias(users, 'practitionerUsers');
+    
     let query = db
       .select()
       .from(appointments)
       .leftJoin(patients, eq(appointments.patientId, patients.id))
-      .leftJoin(users, eq(patients.userId, users.id))
+      .leftJoin(patientUsers, eq(patients.userId, patientUsers.id))
       .leftJoin(practitioners, eq(appointments.practitionerId, practitioners.id))
+      .leftJoin(practitionerUsers, eq(practitioners.userId, practitionerUsers.id))
       .orderBy(desc(appointments.appointmentDate));
 
     if (practitionerId) {
@@ -230,53 +244,79 @@ export class DatabaseStorage implements IStorage {
       query = query.where(eq(appointments.patientId, patientId)) as any;
     }
 
-    return await query.then(rows => rows.map(row => ({
+    const result = await query;
+    
+    return result.map(row => ({
       ...row.appointments,
-      patient: {
-        ...row.patients!,
-        user: row.users!
-      },
-      practitioner: {
-        ...row.practitioners!,
-        user: row.users!
-      }
-    })));
+      patient: row.patients ? {
+        ...row.patients,
+        user: row.patientUsers ? {
+          ...row.patientUsers,
+          firstName: row.patientUsers.firstName,
+          lastName: row.patientUsers.lastName
+        } : null
+      } : null,
+      practitioner: row.practitioners ? {
+        ...row.practitioners,
+        user: row.practitionerUsers ? {
+          ...row.practitionerUsers,
+          firstName: row.practitionerUsers.firstName,
+          lastName: row.practitionerUsers.lastName
+        } : null
+      } : null
+    }));
   }
 
   async getAppointment(id: string): Promise<AppointmentWithDetails | undefined> {
+    const patientUsers = alias(users, 'patientUsers');
+    const practitionerUsers = alias(users, 'practitionerUsers');
+    
     const [result] = await db
       .select()
       .from(appointments)
       .leftJoin(patients, eq(appointments.patientId, patients.id))
-      .leftJoin(users, eq(patients.userId, users.id))
+      .leftJoin(patientUsers, eq(patients.userId, patientUsers.id))
       .leftJoin(practitioners, eq(appointments.practitionerId, practitioners.id))
+      .leftJoin(practitionerUsers, eq(practitioners.userId, practitionerUsers.id))
       .where(eq(appointments.id, id));
 
     if (!result) return undefined;
     return {
       ...result.appointments,
-      patient: {
-        ...result.patients!,
-        user: result.users!
-      },
-      practitioner: {
-        ...result.practitioners!,
-        user: result.users!
-      }
+      patient: result.patients ? {
+        ...result.patients,
+        user: result.patientUsers ? {
+          ...result.patientUsers,
+          firstName: result.patientUsers.firstName,
+          lastName: result.patientUsers.lastName
+        } : null
+      } : null,
+      practitioner: result.practitioners ? {
+        ...result.practitioners,
+        user: result.practitionerUsers ? {
+          ...result.practitionerUsers,
+          firstName: result.practitionerUsers.firstName,
+          lastName: result.practitionerUsers.lastName
+        } : null
+      } : null
     };
   }
 
   async getTodayAppointments(practitionerId: string): Promise<AppointmentWithDetails[]> {
+    const patientUsers = alias(users, 'patientUsers');
+    const practitionerUsers = alias(users, 'practitionerUsers');
+    
     const today = new Date();
     const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
 
-    return await db
+    const result = await db
       .select()
       .from(appointments)
       .leftJoin(patients, eq(appointments.patientId, patients.id))
-      .leftJoin(users, eq(patients.userId, users.id))
+      .leftJoin(patientUsers, eq(patients.userId, patientUsers.id))
       .leftJoin(practitioners, eq(appointments.practitionerId, practitioners.id))
+      .leftJoin(practitionerUsers, eq(practitioners.userId, practitionerUsers.id))
       .where(
         and(
           eq(appointments.practitionerId, practitionerId),
@@ -284,26 +324,42 @@ export class DatabaseStorage implements IStorage {
           lte(appointments.appointmentDate, endOfDay)
         )
       )
-      .orderBy(appointments.appointmentDate)
-      .then(rows => rows.map(row => ({
-        ...row.appointments,
-        patient: {
-          ...row.patients!,
-          user: row.users!
-        },
-        practitioner: {
-          ...row.practitioners!,
-          user: row.users!
-        }
-      })));
+      .orderBy(appointments.appointmentDate);
+
+    return result.map(row => ({
+      ...row.appointments,
+      patient: row.patients ? {
+        ...row.patients,
+        user: row.patientUsers ? {
+          ...row.patientUsers,
+          firstName: row.patientUsers.firstName,
+          lastName: row.patientUsers.lastName
+        } : null
+      } : null,
+      practitioner: row.practitioners ? {
+        ...row.practitioners,
+        user: row.practitionerUsers ? {
+          ...row.practitionerUsers,
+          firstName: row.practitionerUsers.firstName,
+          lastName: row.practitionerUsers.lastName
+        } : null
+      } : null
+    }));
   }
 
   async createAppointment(insertAppointment: InsertAppointment): Promise<Appointment> {
-    const [appointment] = await db
-      .insert(appointments)
-      .values(insertAppointment)
-      .returning();
-    return appointment;
+    console.log('Storage: Creating appointment with data:', insertAppointment);
+    try {
+      const [appointment] = await db
+        .insert(appointments)
+        .values(insertAppointment)
+        .returning();
+      console.log('Storage: Appointment created successfully:', appointment);
+      return appointment;
+    } catch (error) {
+      console.error('Storage: Error creating appointment:', error);
+      throw error;
+    }
   }
 
   async updateAppointment(id: string, updates: Partial<Appointment>): Promise<Appointment | undefined> {
@@ -361,9 +417,22 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getInvoices(patientId?: string, practitionerId?: string): Promise<Invoice[]> {
+    const patientUsers = alias(users, 'patientUsers');
+    const practitionerUsers = alias(users, 'practitionerUsers');
+    
     let query = db
-      .select()
+      .select({
+        invoice: invoices,
+        patient: patients,
+        patientUser: patientUsers,
+        practitioner: practitioners,
+        practitionerUser: practitionerUsers
+      })
       .from(invoices)
+      .leftJoin(patients, eq(invoices.patientId, patients.id))
+      .leftJoin(patientUsers, eq(patients.userId, patientUsers.id))
+      .leftJoin(practitioners, eq(invoices.practitionerId, practitioners.id))
+      .leftJoin(practitionerUsers, eq(practitioners.userId, practitionerUsers.id))
       .orderBy(desc(invoices.createdAt));
 
     if (patientId) {
@@ -373,7 +442,27 @@ export class DatabaseStorage implements IStorage {
       query = query.where(eq(invoices.practitionerId, practitionerId)) as any;
     }
 
-    return await query;
+    const result = await query;
+    
+    return result.map(row => ({
+      ...row.invoice,
+      patient: row.patient ? {
+        ...row.patient,
+        user: row.patientUser ? {
+          ...row.patientUser,
+          firstName: row.patientUser.firstName,
+          lastName: row.patientUser.lastName
+        } : null
+      } : null,
+      practitioner: row.practitioner ? {
+        ...row.practitioner,
+        user: row.practitionerUser ? {
+          ...row.practitionerUser,
+          firstName: row.practitionerUser.firstName,
+          lastName: row.practitionerUser.lastName
+        } : null
+      } : null
+    }));
   }
 
   async getInvoice(id: string): Promise<Invoice | undefined> {
@@ -503,8 +592,30 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getInvoicesByPatientId(patientId: string, search?: string, status?: string, limit: number = 50, offset: number = 0): Promise<Invoice[]> {
+    const patientUsers = alias(users, 'patientUsers');
+    const practitionerUsers = alias(users, 'practitionerUsers');
+    
+    let query = db
+      .select({
+        invoice: invoices,
+        patient: patients,
+        patientUser: patientUsers,
+        practitioner: practitioners,
+        practitionerUser: practitionerUsers
+      })
+      .from(invoices)
+      .leftJoin(patients, eq(invoices.patientId, patients.id))
+      .leftJoin(patientUsers, eq(patients.userId, patientUsers.id))
+      .leftJoin(practitioners, eq(invoices.practitionerId, practitioners.id))
+      .leftJoin(practitionerUsers, eq(practitioners.userId, practitionerUsers.id))
+      .where(eq(invoices.patientId, patientId))
+      .orderBy(desc(invoices.createdAt))
+      .limit(limit)
+      .offset(offset);
+
     const conditions = [eq(invoices.patientId, patientId)];
 
+    // Add search filter if provided
     if (search && search.trim()) {
       const searchTerm = `%${search.trim()}%`;
       conditions.push(
@@ -515,22 +626,63 @@ export class DatabaseStorage implements IStorage {
       );
     }
 
+    // Add status filter if provided
     if (status && status !== "all") {
       conditions.push(eq(invoices.status, status as any));
     }
 
-    return await db
-      .select()
-      .from(invoices)
-      .where(and(...conditions))
-      .orderBy(desc(invoices.createdAt))
-      .limit(limit)
-      .offset(offset);
+    if (conditions.length > 1) {
+      query = query.where(and(...conditions.slice(1))) as any;
+    }
+
+    const result = await query;
+    
+    return result.map(row => ({
+      ...row.invoice,
+      patient: row.patient ? {
+        ...row.patient,
+        user: row.patientUser ? {
+          ...row.patientUser,
+          firstName: row.patientUser.firstName,
+          lastName: row.patientUser.lastName
+        } : null
+      } : null,
+      practitioner: row.practitioner ? {
+        ...row.practitioner,
+        user: row.practitionerUser ? {
+          ...row.practitionerUser,
+          firstName: row.practitionerUser.firstName,
+          lastName: row.practitionerUser.lastName
+        } : null
+      } : null
+    }));
   }
 
   async getInvoicesByPractitionerId(practitionerId: string, search?: string, status?: string, limit: number = 50, offset: number = 0): Promise<Invoice[]> {
+    const patientUsers = alias(users, 'patientUsers');
+    const practitionerUsers = alias(users, 'practitionerUsers');
+    
+    let query = db
+      .select({
+        invoice: invoices,
+        patient: patients,
+        patientUser: patientUsers,
+        practitioner: practitioners,
+        practitionerUser: practitionerUsers
+      })
+      .from(invoices)
+      .leftJoin(patients, eq(invoices.patientId, patients.id))
+      .leftJoin(patientUsers, eq(patients.userId, patientUsers.id))
+      .leftJoin(practitioners, eq(invoices.practitionerId, practitioners.id))
+      .leftJoin(practitionerUsers, eq(practitioners.userId, practitionerUsers.id))
+      .where(eq(invoices.practitionerId, practitionerId))
+      .orderBy(desc(invoices.createdAt))
+      .limit(limit)
+      .offset(offset);
+
     const conditions = [eq(invoices.practitionerId, practitionerId)];
 
+    // Add search filter if provided
     if (search && search.trim()) {
       const searchTerm = `%${search.trim()}%`;
       conditions.push(
@@ -541,17 +693,36 @@ export class DatabaseStorage implements IStorage {
       );
     }
 
+    // Add status filter if provided
     if (status && status !== "all") {
       conditions.push(eq(invoices.status, status as any));
     }
 
-    return await db
-      .select()
-      .from(invoices)
-      .where(and(...conditions))
-      .orderBy(desc(invoices.createdAt))
-      .limit(limit)
-      .offset(offset);
+    if (conditions.length > 1) {
+      query = query.where(and(...conditions.slice(1))) as any;
+    }
+
+    const result = await query;
+    
+    return result.map(row => ({
+      ...row.invoice,
+      patient: row.patient ? {
+        ...row.patient,
+        user: row.patientUser ? {
+          ...row.patientUser,
+          firstName: row.patientUser.firstName,
+          lastName: row.patientUser.lastName
+        } : null
+      } : null,
+      practitioner: row.practitioner ? {
+        ...row.practitioner,
+        user: row.practitionerUser ? {
+          ...row.practitionerUser,
+          firstName: row.practitionerUser.firstName,
+          lastName: row.practitionerUser.lastName
+        } : null
+      } : null
+    }));
   }
 
   async getMessages(userId: string): Promise<MessageWithSender[]> {

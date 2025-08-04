@@ -38,6 +38,13 @@ class ApiClient {
           errorMessage = errorText || response.statusText;
         }
         
+        // Handle token expiration
+        if (response.status === 401 || response.status === 403) {
+          localStorage.removeItem("token");
+          // Redirect to login page
+          window.location.href = "/login";
+        }
+        
         throw new ApiError(response.status, errorMessage);
       }
 
@@ -52,6 +59,8 @@ class ApiClient {
         throw error;
       }
       
+      // Log the actual error for debugging
+      console.error("API Request Error:", error);
       throw new ApiError(0, "Network error or server unavailable");
     }
   }

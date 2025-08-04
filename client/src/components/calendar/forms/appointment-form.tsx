@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { format, addMinutes } from "date-fns";
+import { format, addMinutes, isBefore, addHours, startOfDay, endOfDay, isWithinInterval } from "date-fns";
 import { CalendarIcon, Clock } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
+import { api } from "@/lib/api";
 
 const appointmentFormSchema = z.object({
   title: z.string().min(1, "Title is required"),
@@ -37,25 +37,6 @@ interface AppointmentFormProps {
   onSubmit: () => void;
   onCancel: () => void;
 }
-
-const TIME_SLOTS = [
-  "06:00", "06:15", "06:30", "06:45",
-  "07:00", "07:15", "07:30", "07:45",
-  "08:00", "08:15", "08:30", "08:45",
-  "09:00", "09:15", "09:30", "09:45",
-  "10:00", "10:15", "10:30", "10:45",
-  "11:00", "11:15", "11:30", "11:45",
-  "12:00", "12:15", "12:30", "12:45",
-  "13:00", "13:15", "13:30", "13:45",
-  "14:00", "14:15", "14:30", "14:45",
-  "15:00", "15:15", "15:30", "15:45",
-  "16:00", "16:15", "16:30", "16:45",
-  "17:00", "17:15", "17:30", "17:45",
-  "18:00", "18:15", "18:30", "18:45",
-  "19:00", "19:15", "19:30", "19:45",
-  "20:00", "20:15", "20:30", "20:45",
-  "21:00", "21:15", "21:30", "21:45",
-];
 
 const APPOINTMENT_TYPES = [
   { value: "consultation", label: "Consultation" },
@@ -85,62 +66,190 @@ export function AppointmentForm({ selectedDate, selectedTime, onSubmit, onCancel
   });
 
   // Fetch patients
-  const { data: patients } = useQuery({
+  const { data: patients, isLoading: patientsLoading, error: patientsError } = useQuery({
     queryKey: ["/api/patients"],
     queryFn: async () => {
-      const response = await fetch("/api/patients", {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem("token")}`,
-        },
-      });
-      if (!response.ok) throw new Error("Failed to fetch patients");
-      return response.json();
+      const response = await api.get("/api/patients");
+      return response;
     },
   });
 
   // Fetch practitioners
-  const { data: practitioners } = useQuery({
+  const { data: practitioners, isLoading: practitionersLoading, error: practitionersError } = useQuery({
     queryKey: ["/api/practitioners"],
     queryFn: async () => {
-      const response = await fetch("/api/practitioners", {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem("token")}`,
-        },
-      });
-      if (!response.ok) throw new Error("Failed to fetch practitioners");
-      return response.json();
+      const response = await api.get("/api/practitioners");
+      return response;
     },
+  });
+
+  // Fetch calendar settings for dynamic time slot generation
+  const { data: calendarSettings } = useQuery({
+    queryKey: ["/api/calendar-settings", "practitioner-specific"],
+    queryFn: async () => {
+      const response = await api.get("/api/calendar-settings");
+      console.log("Fetched calendar settings:", response);
+      return response;
+    },
+    staleTime: 30000, // Cache for 30 seconds
+    gcTime: 300000, // Keep in cache for 5 minutes
   });
 
   // Fetch existing appointments for conflict checking
   const { data: existingAppointments } = useQuery({
     queryKey: ["/api/appointments"],
     queryFn: async () => {
-      const response = await fetch("/api/appointments", {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem("token")}`,
-        },
-      });
-      if (!response.ok) throw new Error("Failed to fetch appointments");
-      return response.json();
+      const response = await api.get("/api/appointments");
+      return response;
     },
   });
 
+  // Check for time slot conflicts including buffer time
+  const hasTimeSlotConflict = (date: Date, time: string, practitionerId: string, bufferTime: number) => {
+    if (!date || !practitionerId || !existingAppointments) return false;
+
+    const [hours, minutes] = time.split(':').map(Number);
+    const appointmentDateTime = new Date(date);
+    appointmentDateTime.setHours(hours, minutes, 0, 0);
+
+    const appointmentEndTime = addMinutes(appointmentDateTime, form.watch("duration") || 60);
+    const bufferStartTime = addMinutes(appointmentDateTime, -bufferTime);
+    const bufferEndTime = addMinutes(appointmentEndTime, bufferTime);
+
+    return existingAppointments.some((apt: any) => {
+      if (apt.practitionerId !== practitionerId) return false;
+      
+      const existingDateTime = new Date(apt.appointmentDate);
+      const existingEndTime = addMinutes(existingDateTime, apt.duration || 60);
+      
+      // Check if appointments overlap (including buffer time)
+      return (
+        (appointmentDateTime < existingEndTime && appointmentEndTime > existingDateTime) ||
+        (existingDateTime < bufferEndTime && existingEndTime > bufferStartTime)
+      );
+    });
+  };
+
+  // Validate that appointment is not in the past
+  const isAppointmentInPast = (date: Date, time: string) => {
+    const [hours, minutes] = time.split(':').map(Number);
+    const appointmentDateTime = new Date(date);
+    appointmentDateTime.setHours(hours, minutes, 0, 0);
+    
+    return isBefore(appointmentDateTime, new Date());
+  };
+
+  // Validate that appointment is on a working day
+  const isWorkingDay = (date: Date) => {
+    const settings = calendarSettings || {
+      workingDays: [1, 2, 3, 4, 5] // Monday to Friday
+    };
+    
+    const dayOfWeek = date.getDay(); // 0 = Sunday, 1 = Monday, etc.
+    return settings.workingDays?.includes(dayOfWeek) ?? true;
+  };
+
+  // Validate that appointment is within working hours
+  const isWithinWorkingHours = (time: string) => {
+    const settings = calendarSettings || {
+      defaultStartTime: "09:00",
+      defaultEndTime: "17:00"
+    };
+    
+    const [hours, minutes] = time.split(':').map(Number);
+    const appointmentMinutes = hours * 60 + minutes;
+    
+    const [startHour, startMin] = settings.defaultStartTime.split(':').map(Number);
+    const [endHour, endMin] = settings.defaultEndTime.split(':').map(Number);
+    const startMinutes = startHour * 60 + startMin;
+    const endMinutes = endHour * 60 + endMin;
+    
+    return appointmentMinutes >= startMinutes && appointmentMinutes < endMinutes;
+  };
+
+  // Generate dynamic time slots based on calendar settings
+  const availableTimeSlots = useMemo(() => {
+    const settings = calendarSettings || {
+      timeInterval: 60,
+      defaultStartTime: "09:00",
+      defaultEndTime: "17:00",
+      bufferTime: 0
+    };
+
+    const [startHour, startMin] = settings.defaultStartTime.split(':').map(Number);
+    const [endHour, endMin] = settings.defaultEndTime.split(':').map(Number);
+    
+    let currentMinutes = startHour * 60 + startMin;
+    const endMinutes = endHour * 60 + endMin;
+    const timeSlots = [];
+    const selectedDate = form.watch("appointmentDate");
+    const selectedPractitionerId = form.watch("practitionerId");
+    
+    while (currentMinutes < endMinutes) {
+      const hour = Math.floor(currentMinutes / 60);
+      const min = currentMinutes % 60;
+      const timeString = `${hour.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}`;
+      
+      // Check if this time slot is available (no conflicts with existing appointments)
+      const isAvailable = !hasTimeSlotConflict(selectedDate, timeString, selectedPractitionerId, settings.bufferTime);
+      
+      timeSlots.push({
+        time: timeString,
+        label: format(new Date().setHours(hour, min), 'h:mm a'),
+        isAvailable
+      });
+      
+      currentMinutes += settings.timeInterval;
+    }
+    
+    return timeSlots;
+  }, [calendarSettings, form.watch("appointmentDate"), form.watch("practitionerId"), existingAppointments]);
+
+  // Get form values for API calls
+  const formSelectedDate = form.watch("appointmentDate");
+  const selectedPractitionerId = form.watch("practitionerId");
+
+  // Fetch available time slots from API
+  const { data: availableSlots } = useQuery({
+    queryKey: ["/api/appointments/available-slots", formSelectedDate?.toISOString(), selectedPractitionerId],
+    queryFn: async () => {
+      if (!formSelectedDate || !selectedPractitionerId) return [];
+      
+      const response = await api.get(`/api/appointments/available-slots?date=${formSelectedDate.toISOString()}&practitionerId=${selectedPractitionerId}`);
+      return response;
+    },
+    enabled: !!formSelectedDate && !!selectedPractitionerId,
+  });
+
+  // Use available slots from API if available, otherwise fall back to client-side generation
+  const timeSlots = availableSlots || availableTimeSlots;
+
   const createAppointmentMutation = useMutation({
     mutationFn: async (data: AppointmentFormData) => {
+      console.log("Submitting appointment data:", data);
+      
+      // Final validation before submission
+      if (isAppointmentInPast(data.appointmentDate, data.appointmentTime)) {
+        throw new Error("Cannot create appointments in the past");
+      }
+
       // Combine date and time
       const [hours, minutes] = data.appointmentTime.split(':');
       const appointmentDateTime = new Date(data.appointmentDate);
       appointmentDateTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
 
-      const response = await apiRequest("POST", "/api/appointments", {
+      console.log("Combined appointment date/time:", appointmentDateTime);
+
+      const response = await api.post("/appointments", {
         ...data,
         appointmentDate: appointmentDateTime.toISOString(),
       });
       
-      return response.json();
+      console.log("Appointment creation response:", response);
+      return response;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      console.log("Appointment created successfully:", data);
       queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
       toast({
         title: "Success",
@@ -149,6 +258,7 @@ export function AppointmentForm({ selectedDate, selectedTime, onSubmit, onCancel
       onSubmit();
     },
     onError: (error: any) => {
+      console.error("Appointment creation error:", error);
       toast({
         title: "Error",
         description: error.message || "Failed to create appointment",
@@ -158,21 +268,39 @@ export function AppointmentForm({ selectedDate, selectedTime, onSubmit, onCancel
   });
 
   const handleSubmit = (data: AppointmentFormData) => {
-    // Check for appointment conflicts
-    const [hours, minutes] = data.appointmentTime.split(':');
-    const appointmentDateTime = new Date(data.appointmentDate);
-    appointmentDateTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+    // Validate appointment is not in the past
+    if (isAppointmentInPast(data.appointmentDate, data.appointmentTime)) {
+      toast({
+        title: "Invalid Time",
+        description: "Cannot create appointments in the past",
+        variant: "destructive",
+      });
+      return;
+    }
 
-    // Check if there's already an appointment at the same time with the same practitioner
-    const hasConflict = existingAppointments?.some((apt: any) => {
-      const existingDateTime = new Date(apt.appointmentDate);
-      return (
-        apt.practitionerId === data.practitionerId &&
-        existingDateTime.getTime() === appointmentDateTime.getTime()
-      );
-    });
+    // Validate appointment is on a working day
+    if (!isWorkingDay(data.appointmentDate)) {
+      toast({
+        title: "Invalid Day",
+        description: "Cannot create appointments on non-working days",
+        variant: "destructive",
+      });
+      return;
+    }
 
-    if (hasConflict) {
+    // Validate appointment is within working hours
+    if (!isWithinWorkingHours(data.appointmentTime)) {
+      toast({
+        title: "Invalid Time",
+        description: "Cannot create appointments outside working hours",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Check for appointment conflicts with buffer time
+    const settings = calendarSettings || { bufferTime: 0 };
+    if (hasTimeSlotConflict(data.appointmentDate, data.appointmentTime, data.practitionerId, settings.bufferTime)) {
       toast({
         title: "Scheduling Conflict",
         description: "There is already an appointment scheduled at this time for this practitioner.",
@@ -217,16 +345,29 @@ export function AppointmentForm({ selectedDate, selectedTime, onSubmit, onCancel
                 <FormLabel>Patient</FormLabel>
                 <Select onValueChange={field.onChange} defaultValue={field.value}>
                   <FormControl>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select a patient" />
+                    <SelectTrigger disabled={patientsLoading}>
+                      <SelectValue placeholder={patientsLoading ? "Loading patients..." : "Select a patient"} />
                     </SelectTrigger>
                   </FormControl>
                   <SelectContent>
-                    {patients?.map((patient: any) => (
-                      <SelectItem key={patient.id} value={patient.id}>
-                        {patient.user?.firstName} {patient.user?.lastName}
-                      </SelectItem>
-                    ))}
+                    {patientsLoading ? (
+                      <div className="px-2 py-1.5 text-sm text-slate-500">Loading patients...</div>
+                    ) : patientsError ? (
+                      <div className="px-2 py-1.5 text-sm text-red-500">Error loading patients</div>
+                    ) : patients?.length === 0 ? (
+                      <div className="px-2 py-1.5 text-sm text-slate-500">No patients found</div>
+                    ) : (
+                      patients?.map((patient: any) => (
+                        <SelectItem key={patient.id} value={patient.id}>
+                          {patient.user?.firstName && patient.user?.lastName 
+                            ? `${patient.user.firstName} ${patient.user.lastName}`
+                            : patient.user?.email 
+                            ? patient.user.email
+                            : `Patient ${patient.id.slice(0, 8)}...`
+                          }
+                        </SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
                 <FormMessage />
@@ -243,16 +384,29 @@ export function AppointmentForm({ selectedDate, selectedTime, onSubmit, onCancel
                 <FormLabel>Practitioner</FormLabel>
                 <Select onValueChange={field.onChange} defaultValue={field.value}>
                   <FormControl>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select a practitioner" />
+                    <SelectTrigger disabled={practitionersLoading}>
+                      <SelectValue placeholder={practitionersLoading ? "Loading practitioners..." : "Select a practitioner"} />
                     </SelectTrigger>
                   </FormControl>
                   <SelectContent>
-                    {practitioners?.map((practitioner: any) => (
-                      <SelectItem key={practitioner.id} value={practitioner.id}>
-                        {practitioner.user?.firstName} {practitioner.user?.lastName}
-                      </SelectItem>
-                    ))}
+                    {practitionersLoading ? (
+                      <div className="px-2 py-1.5 text-sm text-slate-500">Loading practitioners...</div>
+                    ) : practitionersError ? (
+                      <div className="px-2 py-1.5 text-sm text-red-500">Error loading practitioners</div>
+                    ) : practitioners?.length === 0 ? (
+                      <div className="px-2 py-1.5 text-sm text-slate-500">No practitioners found</div>
+                    ) : (
+                      practitioners?.map((practitioner: any) => (
+                        <SelectItem key={practitioner.id} value={practitioner.id}>
+                          {practitioner.user?.firstName && practitioner.user?.lastName 
+                            ? `Dr. ${practitioner.user.firstName} ${practitioner.user.lastName}`
+                            : practitioner.user?.email 
+                            ? `Dr. ${practitioner.user.email}`
+                            : `Practitioner ${practitioner.id.slice(0, 8)}...`
+                          }
+                        </SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
                 <FormMessage />
@@ -316,9 +470,14 @@ export function AppointmentForm({ selectedDate, selectedTime, onSubmit, onCancel
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent className="max-h-60">
-                      {TIME_SLOTS.map((time) => (
-                        <SelectItem key={time} value={time}>
-                          {time}
+                      {timeSlots.map((slot: { time: string; label: string; isAvailable?: boolean }) => (
+                        <SelectItem 
+                          key={slot.time} 
+                          value={slot.time}
+                          disabled={!slot.isAvailable}
+                          className={!slot.isAvailable ? "text-muted-foreground" : ""}
+                        >
+                          {slot.label} {!slot.isAvailable && "(Unavailable)"}
                         </SelectItem>
                       ))}
                     </SelectContent>
